@@ -13,6 +13,10 @@ p, span, input, textarea, button { font-size: 17px; line-height: 22px; letter-sp
 .tagline { margin: 0 0 30px; color: #7b03c5; font-style: italic; }
 form { display: grid; gap: 12px; width: min(100%, 420px); }
 .auth-recovery-link { margin-top: 2px; color: #6f6f6a; text-decoration: underline; }
+.install-surface { display: grid; justify-items: center; gap: 8px; margin-top: 18px; text-align: center; }
+.install-hint, .install-guide p { margin: 0; color: #6f6f6a; font-size: 13px; line-height: 18px; }
+.install-guide { display: grid; gap: 8px; width: 100%; padding: 14px; border: 1px solid #bdbdb8; border-radius: 14px; background: #fffefa; text-align: left; }
+.install-guide strong { font-size: 17px; line-height: 22px; }
 input, textarea { width: 100%; border: 1px solid #bdbdb8; border-radius: 14px; padding: 13px 15px; background: #fffefa; color: inherit; }
 textarea { min-height: 90px; resize: vertical; }
 .topbar { display: flex; align-items: center; justify-content: space-between; }
