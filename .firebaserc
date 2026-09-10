@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "adms-by-giri"
+  },
+  "targets": {
+    "adms-by-giri": {
+      "hosting": {
+        "surface-pwa": ["surface-pwa"]
+      }
+    }
+  }
+}
