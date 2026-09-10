@@ -17,6 +17,10 @@ import './styles.css';
 
 type Route = 'home' | 'gallery' | 'notes' | 'camera' | 'captures' | 'pins' | 'profile' | 'account' | 'surface-pro' | 'new-pin' | 'pin-detail' | 'edit-pin' | 'new-note' | 'note-detail' | 'edit-note' | 'search' | 'privacy' | 'terms' | 'refunds' | 'help' | 'payment-return';
 const flushPinSync = async (entitlement: SurfaceEntitlement | null): Promise<void> => { if (entitlement) await flushPinSyncNow(entitlement); };
+const paymentLog = (stage: string, errorCode = 'none', message = 'ok', status?: number) => {
+  const statusPart = status === undefined ? '' : ` status=${status}`;
+  console.info(`[Surface Payment] stage=${stage} errorCode=${errorCode} message=${message}${statusPart}`);
+};
 const routeFromHash = (): { route: Route; id?: string } => { const hashValue = window.location.hash.replace(/^#\/?/, ''); const pathValue = window.location.pathname.replace(/^\/+|\/+$/g, ''); const value = hashValue || pathValue; if (value.startsWith('pins/new')) return { route: 'new-pin', id: value.split('/')[2] }; if (value.startsWith('pins/edit/')) return { route: 'edit-pin', id: value.slice(10) }; if (value.startsWith('pins/')) return { route: 'pin-detail', id: value.slice(5) }; if (value === 'notes/new') return { route: 'new-note' }; if (value.startsWith('notes/edit/')) return { route: 'edit-note', id: value.slice(11) }; if (value.startsWith('notes/')) return { route: 'note-detail', id: value.slice(6) }; const [base, id] = value.split('/'); return { route: (['home', 'gallery', 'notes', 'camera', 'captures', 'pins', 'profile', 'account', 'search', 'surface-pro', 'privacy', 'terms', 'refunds', 'help', 'payment-return'].includes(base) ? base : 'home') as Route, id };
 };
 
@@ -136,19 +140,33 @@ function SurfacePro({ user, entitlement, onAccount, onClose, onRefresh }: { user
     return () => window.clearInterval(interval);
   }, [loadingPlan, startedAt]);
   const checkout = async (tier: PaymentTier, periods: number) => {
-    if (loadingPlan) return;
-    if (!phone) { setMessage('Add your phone number to continue.'); onAccount(); return; }
+    paymentLog('CHECKOUT_CLICKED');
+    if (loadingPlan) { paymentLog('CHECKOUT_CLICKED', 'ATTEMPT_ACTIVE', 'payment already in progress'); return; }
+    const auth = getSurfaceFirebase().auth;
+    const currentUser = auth.currentUser;
+    paymentLog('USER_CHECK', currentUser ? 'none' : 'AUTH_REQUIRED', currentUser ? 'authenticated' : 'no authenticated user');
+    if (!currentUser) { setMessage('Please sign in again to continue.'); return; }
+    if (!phone) { paymentLog('PHONE_CHECK', 'PHONE_MISSING_OR_INVALID', 'profile phone unavailable'); setMessage('Add a valid phone number in Account before starting payment.'); onAccount(); return; }
+    paymentLog('PHONE_CHECK', 'none', 'valid phone available');
     const plan = `surface_${tier.toLowerCase()}_${periods}period`;
     setLoadingPlan(plan); setStartedAt(Date.now()); setCountdown(90); setMessage(null);
     try {
-      const token = await getSurfaceFirebase().auth.currentUser?.getIdToken(true);
-      if (!token) throw new Error();
-      const response = await fetch(`${import.meta.env.VITE_SURFACE_API_BASE_URL ?? 'https://surface-payments.onrender.com'}/payments/create-order`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ client: 'pwa', tier, periods, customerPhone: phone }) });
+      paymentLog('TOKEN_REQUEST');
+      const token = await currentUser.getIdToken(true);
+      if (!token) { paymentLog('TOKEN_REQUEST', 'AUTH_TOKEN_MISSING', 'token unavailable'); throw new Error('AUTH_TOKEN_MISSING'); }
+      paymentLog('TOKEN_REQUEST', 'none', 'token received');
+      const baseUrl = (import.meta.env.VITE_SURFACE_API_BASE_URL ?? 'https://surface-payments.onrender.com').replace(/\/$/, '');
+      const endpoint = `${baseUrl}/payments/create-order`;
+      paymentLog('REQUEST_BUILD', 'none', 'payment request prepared');
+      paymentLog('CREATE_ORDER_FETCH', 'none', 'sending request');
+      const response = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ client: 'pwa', tier, periods, customerPhone: phone }) });
+      paymentLog('CREATE_ORDER_RESPONSE', 'none', 'response received', response.status);
       const result = await response.json() as { order_id?: string; checkout_url?: string; error?: string };
-      if (!response.ok || !result.order_id || !result.checkout_url) throw new Error(result.error ?? 'Payment could not start.');
+      if (!response.ok || !result.order_id || !result.checkout_url) { paymentLog('CREATE_ORDER_RESPONSE', response.status === 401 ? 'AUTH_REJECTED' : response.status >= 500 ? 'PAYMENT_SERVICE_UNAVAILABLE' : 'ORDER_REJECTED', 'order was not created', response.status); throw new Error('ORDER_REJECTED'); }
+      paymentLog('CASHFREE_OPEN', 'none', 'hosted checkout ready');
       sessionStorage.setItem('surface-pending-order', result.order_id);
       window.location.assign(result.checkout_url);
-    } catch { setLoadingPlan(null); setStartedAt(null); setMessage('Payment could not start. Please try again.'); }
+    } catch (error) { const code = error instanceof Error ? error.message : 'PAYMENT_REQUEST_FAILED'; paymentLog('CREATE_ORDER_FETCH', code, 'payment request failed'); setLoadingPlan(null); setStartedAt(null); setMessage(code === 'AUTH_TOKEN_MISSING' ? 'Please sign in again to continue.' : 'Payment could not start. Please try again.'); }
   };
   const cardMessage = loadingPlan ? null : message;
   return <section className="native-subscription">
