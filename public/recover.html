@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Refreshing Surface</title>
+  </head>
+  <body>
+    <p>Refreshing Surface...</p>
+    <script>
+      (async () => {
+        const registrations = await navigator.serviceWorker?.getRegistrations?.() ?? [];
+        await Promise.all(registrations
+          .filter((registration) => registration.scope.startsWith(location.origin))
+          .map((registration) => registration.unregister()));
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames
+          .filter((cacheName) => cacheName.startsWith('surface-pwa-shell-'))
+          .map((cacheName) => caches.delete(cacheName)));
+        location.replace('/?recovered=1');
+      })().catch(() => location.replace('/?recovered=1'));
+    </script>
+  </body>
+</html>

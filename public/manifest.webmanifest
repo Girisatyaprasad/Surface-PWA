@@ -1,0 +1,12 @@
+{
+  "name": "Surface",
+  "short_name": "Surface",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F7F7",
+  "theme_color": "#7B03C5",
+  "description": "Surface captures and retrieves the context around people you meet.",
+  "icons": [
+    { "src": "/surface-logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
