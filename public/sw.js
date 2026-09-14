@@ -1,4 +1,4 @@
-const CACHE = 'surface-pwa-shell-v2';
+const CACHE = 'surface-pwa-shell-v3';
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/surface-logo.svg'];
 
 self.addEventListener('install', (event) => {

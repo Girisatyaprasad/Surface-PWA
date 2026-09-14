@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import type { Note, Pin } from './db';
 import { getSurfaceFirebase } from './firebase';
-import { objectUrl, type SurfaceMedia } from './media';
-import type { SurfaceLocation } from './location';
-import { formatSurfaceLocation } from './location';
+import { mediaDisplayBlob, objectUrl, type SurfaceMedia } from './media';
+import { acquireSurfaceLocation, formatCoordinateGeotag, formatSurfaceLocation, isRecentSurfaceLocation, readSurfaceLocation, snapshotSurfaceLocation, type SurfaceLocation } from './location';
+import { snapshotCameraCaptureMetadata } from './captureMetadata';
 import { SurfaceDialog } from './SurfaceDialog';
 
 export type NativeRoute = 'home' | 'gallery' | 'notes' | 'camera' | 'captures' | 'pins' | 'profile' | 'account' | 'surface-pro' | 'new-pin' | 'new-note' | 'search';
@@ -149,7 +149,7 @@ export function NativeMediaGrid({ title, items, pins, onImport, onDelete, onCrea
   const gallery = title === 'Surface Gallery';
   if (viewer !== null && items[viewer]) return <NativeViewer items={items} index={viewer} mode={gallery ? 'gallery' : 'pin'} onClose={() => setViewer(null)} onChange={setViewer} onDelete={gallery ? () => { setPendingGalleryDelete(items[viewer].id); setViewer(null); } : undefined} />;
   return <section className={`native-media-screen ${gallery ? 'native-media-screen--gallery' : ''}`}><div className="section-heading"><h2>{title}</h2>{onImport && <><input ref={picker} className="visually-hidden" type="file" accept="image/*" onChange={async (event) => { const file = event.target.files?.[0]; if (file) await onImport(file); event.target.value = ''; }} />{gallery ? <button className="gallery-upload" onClick={() => picker.current?.click()} aria-label="Upload images"><NativePlusIcon /></button> : <button className="native-round-plus" onClick={() => picker.current?.click()} aria-label="Upload images">＋</button>}</>}</div>
-    {items.length === 0 ? gallery ? <GalleryEmpty onUpload={() => picker.current?.click()} /> : <NativeEmpty title="You didn't have any captures." action="Camera" onAction={() => window.location.hash = '#camera'} /> : <div className="native-media-grid">{items.map((item, index) => <article className="native-media-tile" key={item.id}><button onClick={() => { if (longPress.current) { longPress.current = false; return; } setViewer(index); }} onContextMenu={(event) => { event.preventDefault(); longPress.current = true; setMenuFor(item.id); }} onPointerDown={(event) => { longPress.current = false; const timer = window.setTimeout(() => { longPress.current = true; setMenuFor(item.id); }, 650); const cancel = () => { clearTimeout(timer); event.currentTarget.removeEventListener('pointerup', cancel); event.currentTarget.removeEventListener('pointercancel', cancel); }; event.currentTarget.addEventListener('pointerup', cancel); event.currentTarget.addEventListener('pointercancel', cancel); }}><img src={objectUrl(item.processed)} alt="" />{captureGrid && <div className="capture-stamp"><img src="/surface-logo.svg" alt="" /><span>{item.dateKey}<br />{item.timeLabel}<br />{item.locationLabel || 'Location unavailable'}</span></div>}</button>{gallery && menuFor === item.id && <div className="gallery-tile-action"><button onClick={() => { setMenuFor(null); setPendingGalleryDelete(item.id); }}>Delete</button></div>}</article>)}</div>}
+    {items.length === 0 ? gallery ? <GalleryEmpty onUpload={() => picker.current?.click()} /> : <NativeEmpty title="You didn't have any captures." action="Camera" onAction={() => window.location.hash = '#camera'} /> : <div className="native-media-grid">{items.map((item, index) => <article className="native-media-tile" key={item.id}><button onClick={() => { if (longPress.current) { longPress.current = false; return; } setViewer(index); }} onContextMenu={(event) => { event.preventDefault(); longPress.current = true; setMenuFor(item.id); }} onPointerDown={(event) => { longPress.current = false; const timer = window.setTimeout(() => { longPress.current = true; setMenuFor(item.id); }, 650); const cancel = () => { clearTimeout(timer); event.currentTarget.removeEventListener('pointerup', cancel); event.currentTarget.removeEventListener('pointercancel', cancel); }; event.currentTarget.addEventListener('pointerup', cancel); event.currentTarget.addEventListener('pointercancel', cancel); }}><img src={objectUrl(item.processed)} alt="" />{captureGrid && <div className="capture-stamp"><img src="/surface-logo.svg" alt="" /><span>{item.dateKey}<br />{item.timeLabel}{item.locationLabel && <><br />{item.locationLabel}</>}</span></div>}</button>{gallery && menuFor === item.id && <div className="gallery-tile-action"><button onClick={() => { setMenuFor(null); setPendingGalleryDelete(item.id); }}>Delete</button></div>}</article>)}</div>}
     {menuFor && !gallery && <div className="overlay"><div className="native-media-menu"><button onClick={() => setMenuFor(null)}>Cancel</button>{onCreatePin && <button onClick={() => { onCreatePin(menuFor); setMenuFor(null); }}>Create PIN</button>}{onConnectExisting && <button onClick={() => { setConnectFor(menuFor); setMenuFor(null); }}>Connect Existing</button>}<button className="destructive" onClick={() => { const id = menuFor; setMenuFor(null); void onDelete(id); }}>Delete</button></div></div>}
     {pendingGalleryDelete && <GalleryDeleteDialog onCancel={() => setPendingGalleryDelete(null)} onDelete={() => { const id = pendingGalleryDelete; setPendingGalleryDelete(null); void onDelete(id); }} />}
     {connectFor && <div className="overlay"><div className="native-media-menu"><h3>Connect to a PIN</h3>{pins.map((pin) => <button key={pin.id} onClick={() => { void onConnectExisting?.(connectFor, pin.id); setConnectFor(null); }}>{pin.name || 'Unnamed PIN'}</button>)}<button onClick={() => setConnectFor(null)}>Cancel</button></div></div>}
@@ -198,7 +198,7 @@ export function NativeProfile({ uid, name, email, tier, onAccount, onPro, onHome
   const displayName = cloudName?.trim() || name.trim() || 'Surface User';
   const plan = tier === 'FREE' ? 'Free' : 'Surface Pro';
   const open = (item: string) => { const pages: Record<string, 'privacy' | 'terms' | 'refunds' | 'help'> = { 'Privacy Policy': 'privacy', 'Terms & Conditions': 'terms', 'Refund & Cancellation': 'refunds', Help: 'help' }; if (pages[item]) { onInfo(pages[item]); return; } const targets: Record<string, string> = { Website: 'https://adms-by-giri.web.app', Instagram: 'https://www.instagram.com/surfaceindia', Feedback: 'mailto:girisatya584@gmail.com?subject=Surface%20Feedback' }; const target = targets[item]; if (target) window.open(target, '_blank', 'noopener,noreferrer'); };
-  return <section className="native-profile native-profile-screen">
+  return <section className={`native-profile native-profile-screen${tier === 'MAX' ? ' native-profile-screen--max' : ''}`}>
     <div className="native-profile-title"><h2>Profile</h2><div><button className="profile-top-button" onClick={onHome}>Home</button><button className="profile-top-button" onClick={onEdit}>Edit</button></div></div>
     <div className="native-profile-summary"><div className="native-avatar">{photoUri ? <img className="native-avatar-photo" src={photoUri} alt="" /> : <img className="native-avatar-logo" src="/surface-logo.svg" alt="Surface" />}</div><div><strong>{displayName}</strong><small>User name</small><span className={tier === 'FREE' ? 'profile-plan profile-plan--free' : 'profile-plan'}>{plan}</span></div></div>
     <h3>Account</h3>
@@ -213,18 +213,35 @@ function NativeProfileRow({ title, onClick }: { title: string; onClick: () => vo
 
 function NativeChevronIcon() { return <svg className="profile-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>; }
 
-type PendingCameraCapture = { file: File; capturedAt: Date; location: SurfaceLocation | null };
+type PendingCameraCapture = { file: File; capturedAt: Date; location: SurfaceLocation | null; locationLabel: string };
+
+function logCameraCapture(stage: string, data: Record<string, unknown>) {
+  console.info(`[SurfaceCamera] ${stage}`, data);
+}
+
+async function imageDimensions(blob: Blob): Promise<{ width: number; height: number }> {
+  try {
+    const image = await createImageBitmap(blob);
+    const dimensions = { width: image.width, height: image.height };
+    image.close();
+    return dimensions;
+  } catch {
+    return { width: 0, height: 0 };
+  }
+}
 
 export function NativeCamera({ onBack, onSaved, onCreatePin, onConnectExisting, onMessage, location, pins, save }: { onBack: () => void; onSaved: (item: SurfaceMedia) => void; onCreatePin: (item: SurfaceMedia) => void; onConnectExisting: (item: SurfaceMedia, pinId: string) => Promise<void>; onMessage: (message: string) => void; location: SurfaceLocation | null; pins: Pin[]; save: (file: File, location: SurfaceLocation | null) => Promise<SurfaceMedia> }) {
   const input = useRef<HTMLInputElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const [facing, setFacing] = useState<'environment' | 'user'>('environment');
+  const [currentLocation, setCurrentLocation] = useState<SurfaceLocation | null>(() => snapshotSurfaceLocation(location, Date.now()) ?? readSurfaceLocation());
+  const currentLocationRef = useRef(currentLocation);
   const [pending, setPending] = useState<PendingCameraCapture | null>(null);
   const [saving, setSaving] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const previewUrl = useMemo(() => pending ? URL.createObjectURL(pending.file) : null, [pending]);
-  const label = formatSurfaceLocation(pending?.location ?? location);
+  const label = pending ? pending.locationLabel : formatCoordinateGeotag(currentLocation);
 
   const stopCamera = () => {
     stream.current?.getTracks().forEach((track) => track.stop());
@@ -236,9 +253,11 @@ export function NativeCamera({ onBack, onSaved, onCreatePin, onConnectExisting, 
     let active = true;
     const startCamera = async () => {
       try {
-        const next = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false });
+        const next = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false });
         if (!active) { next.getTracks().forEach((track) => track.stop()); return; }
         stream.current = next;
+        const track = next.getVideoTracks()[0];
+        logCameraCapture('STREAM_READY', { videoWidth: video.current?.videoWidth ?? 0, videoHeight: video.current?.videoHeight ?? 0, trackWidth: track?.getSettings().width ?? 0, trackHeight: track?.getSettings().height ?? 0, facingMode: track?.getSettings().facingMode ?? facing });
         if (video.current) { video.current.srcObject = next; await video.current.play(); }
       } catch {
         // The shutter still opens the native browser picker when live preview is unavailable.
@@ -248,23 +267,65 @@ export function NativeCamera({ onBack, onSaved, onCreatePin, onConnectExisting, 
     return () => { active = false; stopCamera(); };
   }, [facing, pending]);
 
+  useEffect(() => {
+    let active = true;
+    const cached = readSurfaceLocation();
+    if (cached && isRecentSurfaceLocation(cached)) {
+      currentLocationRef.current = cached;
+      setCurrentLocation(cached);
+    }
+    void acquireSurfaceLocation().then((result) => {
+      if (!active) return;
+      const next = result.outcome === 'denied' ? null : result.location ?? currentLocationRef.current;
+      currentLocationRef.current = next;
+      setCurrentLocation(next);
+    });
+    return () => { active = false; };
+  }, []);
+
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
 
-  const beginPreview = (file: File) => setPending({ file, capturedAt: new Date(), location });
-  const capture = () => {
+  const beginPreview = (file: File, capturePath: string, metadata: ReturnType<typeof snapshotCameraCaptureMetadata>) => {
+    logCameraCapture('CAPTURE_METADATA_SNAPSHOT', {
+      capturePath,
+      hasLocation: Boolean(metadata.location),
+      hasLocationLabel: Boolean(metadata.locationLabel),
+      locationAccuracyMeters: metadata.location?.accuracy ?? null,
+      locationAgeMs: metadata.location ? Math.max(0, metadata.capturedAt - metadata.location.timestamp) : null,
+    });
+    setPending({ file, capturedAt: new Date(metadata.capturedAt), location: metadata.location, locationLabel: metadata.locationLabel });
+  };
+  const capture = async () => {
     const camera = video.current;
     if (!camera || camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !camera.videoWidth || !camera.videoHeight) {
       input.current?.click();
       return;
+    }
+    const capturedAt = Date.now();
+    const captureMetadata = snapshotCameraCaptureMetadata(currentLocationRef.current, capturedAt);
+    const track = stream.current?.getVideoTracks()[0];
+    if (track && 'ImageCapture' in window) {
+      try {
+        const still = await new ImageCapture(track).takePhoto();
+        const dimensions = await imageDimensions(still);
+        logCameraCapture('CAPTURE_IMAGE', { videoWidth: camera.videoWidth, videoHeight: camera.videoHeight, captureWidth: dimensions.width, captureHeight: dimensions.height, mimeType: still.type, blobSize: still.size, quality: 'native ImageCapture' });
+        beginPreview(new File([still], `Surface-${capturedAt}.jpg`, { type: still.type || 'image/jpeg' }), 'imagecapture', captureMetadata);
+        return;
+      } catch {
+        logCameraCapture('IMAGECAPTURE_FALLBACK', { videoWidth: camera.videoWidth, videoHeight: camera.videoHeight });
+      }
     }
     const canvas = document.createElement('canvas');
     canvas.width = camera.videoWidth;
     canvas.height = camera.videoHeight;
     canvas.getContext('2d')?.drawImage(camera, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
-      if (blob) beginPreview(new File([blob], `Surface-${Date.now()}.jpg`, { type: 'image/jpeg' }));
+      if (blob) {
+        logCameraCapture('CAPTURE_CANVAS', { videoWidth: camera.videoWidth, videoHeight: camera.videoHeight, canvasWidth: canvas.width, canvasHeight: canvas.height, captureWidth: canvas.width, captureHeight: canvas.height, mimeType: blob.type, blobSize: blob.size, quality: 0.98 });
+        beginPreview(new File([blob], `Surface-${capturedAt}.jpg`, { type: 'image/jpeg' }), 'canvas', captureMetadata);
+      }
       else input.current?.click();
-    }, 'image/jpeg', .94);
+    }, 'image/jpeg', .98);
   };
   const persist = async (next: (item: SurfaceMedia) => void | Promise<void>) => {
     if (!pending || saving) return;
@@ -277,12 +338,12 @@ export function NativeCamera({ onBack, onSaved, onCreatePin, onConnectExisting, 
   return <section className="native-camera">
     {!pending && <video ref={video} className={`camera-live-preview ${facing === 'user' ? 'camera-live-preview--front' : ''}`} autoPlay muted playsInline aria-hidden="true" />}
     {pending && previewUrl && <img className="camera-captured-preview" src={previewUrl} alt="Captured preview" />}
-    <input ref={input} className="visually-hidden" type="file" accept="image/*" capture="environment" onChange={(event) => { const file = event.target.files?.[0]; if (file) beginPreview(file); event.target.value = ''; }} />
+    <input ref={input} className="visually-hidden" type="file" accept="image/*" capture="environment" onChange={(event) => { const file = event.target.files?.[0]; if (file) { const capturedAt = Date.now(); beginPreview(file, 'file-picker', snapshotCameraCaptureMetadata(null, capturedAt)); } event.target.value = ''; }} />
     <div className="camera-top-controls">
       <button className="camera-back" onClick={() => pending ? discard() : onBack()}>Back</button>
       <button className="camera-flip" onClick={() => setFacing((value) => value === 'environment' ? 'user' : 'environment')} aria-label="Flip camera"><CameraFlipIcon /></button>
     </div>
-    {label && <CameraGeotag date={pending?.capturedAt ?? new Date()} label={label} />}
+    {label && <CameraGeotag label={label} />}
     <button className="camera-shutter" onClick={capture} aria-label="Capture photo"><i /></button>
     {pending && <div className="camera-post-actions">
       <button onClick={() => void persist(onSaved)} disabled={saving}>{saving ? 'Saving' : 'Save'}</button>
@@ -296,8 +357,8 @@ export function NativeCamera({ onBack, onSaved, onCreatePin, onConnectExisting, 
   </section>;
 }
 
-function CameraGeotag({ date, label }: { date: Date; label: string }) {
-  return <div className="camera-metadata"><img src="/surface-logo.svg" alt="" /><span>{date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}<br />{date.toLocaleDateString('en-GB')}<br />{label}</span></div>;
+function CameraGeotag({ label }: { label: string }) {
+  return <div className="camera-geotag" aria-label={`Photo location: ${label}`}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-7.2 8-13a8 8 0 1 0-16 0c0 5.8 8 13 8 13Zm0-10.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z" /></svg><span>{label}</span></div>;
 }
 
 function CameraFlipIcon() {

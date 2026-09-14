@@ -1,0 +1,9 @@
+{
+  "firestore": {
+    "rules": "src/organizations/emulator-bootstrap.rules"
+  },
+  "emulators": {
+    "firestore": { "port": 8080 },
+    "ui": { "enabled": false }
+  }
+}
