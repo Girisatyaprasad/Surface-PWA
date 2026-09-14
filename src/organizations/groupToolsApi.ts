@@ -34,20 +34,26 @@ export type GroupIisAnalysis = {
 const apiBase = () => (import.meta.env.VITE_SURFACE_API_BASE_URL ?? 'https://surface-payments.onrender.com').replace(/\/+$/, '');
 
 async function request<T>(user: User, path: string, method = 'GET', body?: unknown): Promise<T> {
-  const token = await user.getIdToken();
-  const response = await fetch(`${apiBase()}${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  let token: string;
+  try { token = await user.getIdToken(); }
+  catch { throw new Error('Surface could not verify the current sign-in session. Sign in again.'); }
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase()}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch { throw new Error('Surface organization services could not be reached. Check your connection and retry.'); }
   const result: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const code = result && typeof result === 'object' && 'code' in result ? String((result as { code: unknown }).code) : '';
     const message = code === 'GROUP_PLAN_REQUIRED' ? 'This organization’s Group Plan is not active.'
       : code === 'ORGANIZATION_MEMBERSHIP_REQUIRED' ? 'No active Group Plan membership was found.'
         : code === 'ORGANIZATION_ROLE_DENIED' ? 'This action is not available for your organization role.'
-          : response.status >= 500 ? 'Group Tools is temporarily unavailable. Try again.'
-            : 'Group Tools could not complete that request.';
+          : response.status === 401 ? 'Surface could not verify the current sign-in session. Sign in again.'
+            : response.status >= 500 ? 'Group Tools is temporarily unavailable. Try again.'
+              : 'Group Tools could not complete that request.';
     throw new Error(message);
   }
   return result as T;

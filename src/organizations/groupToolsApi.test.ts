@@ -27,4 +27,12 @@ describe('Group Tools API client', () => {
     expect(result).toHaveLength(1);
     expect(fetch.mock.calls[0][0]).toContain('/iis/analysis/group/g%2F1?organizationId=org%20id&window=30d');
   });
+
+  it('classifies session and network failures without exposing tokens or server details', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ code: 'AUTH_INVALID', error: 'private server detail' }), { status: 401 })));
+    await expect(listMyGroupMemberships(user)).rejects.toThrow('Surface could not verify the current sign-in session. Sign in again.');
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network failure'); }));
+    await expect(listMyGroupMemberships(user)).rejects.toThrow('Surface organization services could not be reached. Check your connection and retry.');
+  });
 });
