@@ -340,6 +340,53 @@ textarea { min-height: 90px; resize: vertical; }
 .gallery-delete-dialog button:last-child { background: #000; color: #fff; }
 }
 
+.profile-plan-section { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 15px 16px; border-radius: 14px; background: #1c1c1e; }
+.profile-plan-section h3 { margin: 0; font-size: 14px; line-height: 19px; font-weight: 500; }
+.profile-plan-section p { margin: 0; color: #aaa; font-size: 14px; line-height: 19px; text-transform: capitalize; }
+.profile-group-card, .profile-account-status { display: grid; gap: 7px; margin-top: 12px; padding: 16px; border: 1px solid #414145; border-radius: 14px; background: #1c1c1e; }
+.profile-group-card > small, .profile-group-card > span, .profile-account-status p { margin: 0; color: #aaa; font-size: 13px; line-height: 18px; }
+.profile-group-card > strong { font-size: 17px; line-height: 22px; }
+.profile-group-card > button, .profile-account-status button { justify-self: start; min-height: 38px; margin-top: 4px; padding: 9px 13px; border: 1px solid #777; border-radius: 19px; background: transparent; color: inherit; font: inherit; font-size: 14px; font-weight: 600; }
+.group-tools-shell { min-height: 100svh; padding-top: calc(14px + env(safe-area-inset-top)); }
+.group-tools-screen { display: grid; align-content: start; gap: 14px; min-height: calc(100svh - 28px - env(safe-area-inset-top)); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.group-tools-heading { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 8px; }
+.group-tools-heading h2 { margin: 0; font-size: 25px; line-height: 30px; font-weight: 600; }
+.group-tools-heading button, .group-tools-section button, .group-tools-inline-form button { min-height: 36px; padding: 8px 12px; border: 1px solid #666; border-radius: 18px; background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 600; }
+.group-tools-heading button:disabled, .group-tools-screen button:disabled { opacity: .55; }
+.group-tools-overview, .group-tools-section { display: grid; gap: 12px; padding: 16px; border: 1px solid #414145; border-radius: 14px; background: #1c1c1e; }
+.group-tools-kicker { margin: 0; color: #aaa; font-size: 13px; line-height: 18px; }
+.group-tools-overview h3, .group-tools-section h3 { margin: 0; font-size: 17px; line-height: 22px; font-weight: 600; }
+.group-tools-overview dl { display: grid; gap: 0; margin: 0; }
+.group-tools-overview dl > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid #38383a; font-size: 13px; line-height: 18px; }
+.group-tools-overview dt { color: #aaa; }
+.group-tools-overview dd { margin: 0; text-align: right; text-transform: capitalize; }
+.group-tools-list { display: grid; gap: 8px; }
+.group-tools-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid #38383a; }
+.group-tools-row > div:first-child { display: grid; min-width: 0; gap: 3px; }
+.group-tools-row strong { overflow-wrap: anywhere; font-size: 14px; line-height: 19px; font-weight: 600; }
+.group-tools-row small, .group-tools-insight span, .group-tools-insight small, .group-tools-muted { margin: 0; color: #aaa; font-size: 12px; line-height: 17px; }
+.group-tools-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.group-tools-row-actions button, .group-tools-row-actions select { min-height: 32px; max-width: 145px; padding: 6px 8px; border: 1px solid #666; border-radius: 16px; background: transparent; color: inherit; font: inherit; font-size: 12px; }
+.group-tools-inline-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.group-tools-inline-form input, .group-tools-inline-form select { min-width: 0; min-height: 40px; flex: 1 1 180px; padding: 9px 11px; border: 1px solid #666; border-radius: 9px; background: transparent; color: inherit; font: inherit; font-size: 14px; }
+.group-tools-inline-form select option, .group-tools-row-actions select option { color: #111; }
+.group-tools-inline-form button { flex: 0 0 auto; }
+.group-tools-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.group-tools-metric { display: grid; gap: 3px; padding: 12px; border-radius: 10px; background: rgba(127,127,127,.12); }
+.group-tools-metric strong { font-size: 17px; line-height: 22px; }
+.group-tools-metric span { color: #aaa; font-size: 12px; line-height: 17px; }
+.group-tools-insight { display: grid; gap: 3px; padding: 10px 0; border-top: 1px solid #38383a; }
+.group-tools-insight strong { font-size: 14px; line-height: 19px; }
+.group-tools-message { margin: 0; color: #aaa; font-size: 13px; line-height: 18px; }
+@media (prefers-color-scheme: light) {
+  .profile-plan-section, .profile-group-card, .profile-account-status, .group-tools-overview, .group-tools-section { border-color: #deded9; background: #fffefa; }
+  .profile-plan-section, .profile-group-card, .group-tools-screen, .group-tools-heading, .group-tools-overview h3, .group-tools-section h3 { color: #1c1c1c; }
+  .profile-plan-section p, .profile-group-card > small, .profile-group-card > span, .profile-account-status p, .group-tools-kicker, .group-tools-overview dt, .group-tools-row small, .group-tools-insight span, .group-tools-insight small, .group-tools-muted, .group-tools-message, .group-tools-metric span { color: #6f6f6a; }
+  .profile-group-card > button, .profile-account-status button, .group-tools-heading button, .group-tools-section button, .group-tools-inline-form button, .group-tools-row-actions button, .group-tools-row-actions select, .group-tools-inline-form input, .group-tools-inline-form select { border-color: #bdbdb8; color: #1c1c1c; }
+  .group-tools-overview dl > div, .group-tools-row, .group-tools-insight { border-color: #e0e0dc; }
+  .group-tools-metric { background: #f1f1ed; }
+}
+
 /* Notes only: direct translation of NotesScreen.kt and NoteBlockEditor. */
 .notes-shell { min-height: 100svh; padding-top: calc(14px + env(safe-area-inset-top)); background: #000; }
 .native-notes-screen { padding-top: 0; }

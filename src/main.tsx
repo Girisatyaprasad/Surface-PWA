@@ -5,6 +5,7 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { createNote as createNoteInWorkspace, createPin as createPinInWorkspace, deleteLocalNote as deleteNoteInWorkspace, deleteLocalPin as deletePinInWorkspace, listNotes as listWorkspaceNotes, listPins as listWorkspacePins, putNote as putNoteInWorkspace, putPin as putPinInWorkspace, queuePinOperation as queueWorkspaceOperation, type Note, type Pin } from './db';
 import { firebaseConfigError, getSurfaceFirebase } from './firebase';
 import { readSurfaceEntitlement, type SurfaceEntitlement } from './entitlement';
+import { readLastKnownEntitlement, writeLastKnownEntitlement } from './entitlementCache';
 import { surfaceAccentTheme, type SurfaceVisualTier } from './accentTheme';
 import { flushPinSync as flushPinSyncNow, hydratePins } from './sync';
 import { normalizeIndianMobile, paymentAmount, type PaymentTier } from './payments';
@@ -19,6 +20,8 @@ import { consumePasswordResetReturn, passwordResetResultMessage, passwordResetSe
 import { InstallSurface } from './InstallSurface';
 import { CreateAccountScreen } from './CreateAccountScreen';
 import { InternalProvisioningScreen } from './InternalProvisioningScreen';
+import { GroupToolsScreen } from './GroupToolsScreen';
+import { listMyGroupMemberships, type GroupToolsMembership } from './organizations/groupToolsApi';
 import { queueInitialMemberSnapshot, recordSurfaceAnalyticsActivity as recordSurfaceAnalyticsActivityInWorkspace, startSurfaceAnalyticsPipeline } from './organizations/snapshotPipeline';
 import { requireWorkspaceUid } from './localWorkspace';
 import { dismissLegacyRecovery, getLegacyRecoveryStatus, migrateLegacyData, type LegacyRecoveryStatus } from './legacyRecovery';
@@ -26,18 +29,18 @@ import { LegacyRecoveryDialog, type LegacyRecoveryDialogMode } from './LegacyRec
 import type { SignupUser } from './accountCreation';
 import './styles.css';
 
-type Route = 'home' | 'gallery' | 'notes' | 'camera' | 'captures' | 'pins' | 'profile' | 'account' | 'surface-pro' | 'new-pin' | 'pin-detail' | 'edit-pin' | 'new-note' | 'note-detail' | 'edit-note' | 'search' | 'privacy' | 'terms' | 'refunds' | 'help' | 'payment-return' | 'internal';
+type Route = 'home' | 'gallery' | 'notes' | 'camera' | 'captures' | 'pins' | 'profile' | 'account' | 'surface-pro' | 'group-tools' | 'new-pin' | 'pin-detail' | 'edit-pin' | 'new-note' | 'note-detail' | 'edit-note' | 'search' | 'privacy' | 'terms' | 'refunds' | 'help' | 'payment-return' | 'internal';
 const flushPinSyncForWorkspace = async (entitlement: SurfaceEntitlement | null, uid: string): Promise<void> => { if (entitlement) await flushPinSyncNow(entitlement, uid); };
 const paymentLog = (stage: string, errorCode = 'none', message = 'ok', status?: number) => {
   const statusPart = status === undefined ? '' : ` status=${status}`;
   console.info(`[Surface Payment] stage=${stage} errorCode=${errorCode} message=${message}${statusPart}`);
 };
-const routeFromHash = (): { route: Route; id?: string } => { const hashValue = window.location.hash.replace(/^#\/?/, ''); const pathValue = window.location.pathname.replace(/^\/+|\/+$/g, ''); const value = hashValue || pathValue; if (value.startsWith('pins/new')) return { route: 'new-pin', id: value.split('/')[2] }; if (value.startsWith('pins/edit/')) return { route: 'edit-pin', id: value.slice(10) }; if (value.startsWith('pins/')) return { route: 'pin-detail', id: value.slice(5) }; if (value === 'notes/new') return { route: 'new-note' }; if (value.startsWith('notes/edit/')) return { route: 'edit-note', id: value.slice(11) }; if (value.startsWith('notes/')) return { route: 'note-detail', id: value.slice(6) }; const [base, id] = value.split('/'); return { route: (['home', 'gallery', 'notes', 'camera', 'captures', 'pins', 'profile', 'account', 'search', 'surface-pro', 'privacy', 'terms', 'refunds', 'help', 'payment-return', 'internal'].includes(base) ? base : 'home') as Route, id };
+const routeFromHash = (): { route: Route; id?: string } => { const hashValue = window.location.hash.replace(/^#\/?/, ''); const pathValue = window.location.pathname.replace(/^\/+|\/+$/g, ''); const value = hashValue || pathValue; if (value.startsWith('pins/new')) return { route: 'new-pin', id: value.split('/')[2] }; if (value.startsWith('pins/edit/')) return { route: 'edit-pin', id: value.slice(10) }; if (value.startsWith('pins/')) return { route: 'pin-detail', id: value.slice(5) }; if (value === 'notes/new') return { route: 'new-note' }; if (value.startsWith('notes/edit/')) return { route: 'edit-note', id: value.slice(11) }; if (value.startsWith('notes/')) return { route: 'note-detail', id: value.slice(6) }; const [base, id] = value.split('/'); return { route: (['home', 'gallery', 'notes', 'camera', 'captures', 'pins', 'profile', 'account', 'search', 'surface-pro', 'group-tools', 'privacy', 'terms', 'refunds', 'help', 'payment-return', 'internal'].includes(base) ? base : 'home') as Route, id };
 };
 
 function App() {
   const [user, setUser] = useState<User | null>(null); const [navigation, setNavigation] = useState(routeFromHash); const [pins, setPinsState] = useState<Pin[]>([]); const [notes, setNotesState] = useState<Note[]>([]); const [media, setMediaState] = useState<SurfaceMedia[]>([]);
-  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [message, setMessage] = useState(() => consumePasswordResetReturn(window.location, window.history) ? 'Password changed. Sign in with your new password.' : ''); const [authMode, setAuthMode] = useState<'sign-in' | 'recovery' | 'create-account'>('sign-in'); const [entitlement, setEntitlement] = useState<SurfaceEntitlement | null>(null); const configError = firebaseConfigError();
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [message, setMessage] = useState(() => consumePasswordResetReturn(window.location, window.history) ? 'Password changed. Sign in with your new password.' : ''); const [authMode, setAuthMode] = useState<'sign-in' | 'recovery' | 'create-account'>('sign-in'); const [entitlement, setEntitlement] = useState<SurfaceEntitlement | null>(null); const [accountStateError, setAccountStateError] = useState(''); const [groupMemberships, setGroupMemberships] = useState<GroupToolsMembership[]>([]); const [groupAccessError, setGroupAccessError] = useState(''); const configError = firebaseConfigError();
   const signupPending = useRef(false);
   const activeUid = useRef<string | null>(null);
   const loadWorkspaceRef = useRef<(nextUser: User) => Promise<void>>(async () => undefined);
@@ -61,15 +64,29 @@ function App() {
     const loadWorkspace = async (nextUser: User) => {
       const uid = requireWorkspaceUid(nextUser.uid);
       activeUid.current = uid;
-      setPinsState([]); setNotesState([]); setMediaState([]); setEntitlement(null);
+      setPinsState([]); setNotesState([]); setMediaState([]);
+      const cachedEntitlement = readLastKnownEntitlement(uid);
+      setEntitlement(cachedEntitlement);
+      setAccountStateError('');
+      const freeLocalMode: SurfaceEntitlement = { tier: 'FREE', proStatus: 'UNPAID', planId: null, expiresAt: null };
+      let authoritativeEntitlement: SurfaceEntitlement | null = null;
       try {
-        const nextEntitlement = await readSurfaceEntitlement(firestore, uid);
+        authoritativeEntitlement = await readSurfaceEntitlement(firestore, uid);
         if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
-        setEntitlement(nextEntitlement);
-        const [nextNotes, nextPins] = await Promise.all([hydrateWorkspaceNotes(nextEntitlement, uid), hydratePins(nextEntitlement, uid)]);
+        setEntitlement(authoritativeEntitlement);
+        writeLastKnownEntitlement(uid, authoritativeEntitlement);
+      } catch {
+        if (activeUid.current === uid && auth.currentUser?.uid === uid) setAccountStateError('Surface could not refresh account and plan status. Local features remain available.');
+      }
+      try {
+        const [localNotes, localPins, localMedia] = await Promise.all([listWorkspaceNotes(uid), listWorkspacePins(uid), listWorkspaceMedia(uid)]);
+        if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
+        setNotesState(localNotes); setPinsState(localPins); setMediaState(localMedia);
+        const dataEntitlement = authoritativeEntitlement ?? freeLocalMode;
+        const [nextNotes, nextPins] = await Promise.all([hydrateWorkspaceNotes(dataEntitlement, uid), hydratePins(dataEntitlement, uid)]);
         if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
         setNotesState(nextNotes); setPinsState(nextPins);
-        await hydrateWorkspaceMedia(nextEntitlement, uid);
+        await hydrateWorkspaceMedia(dataEntitlement, uid);
         const nextMedia = await listWorkspaceMedia(uid);
         if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
         setMediaState(nextMedia);
@@ -81,11 +98,12 @@ function App() {
           }
         } catch { /* Recovery detection must not block the signed-in workspace. */ }
         void queueInitialMemberSnapshot(uid);
-        await flushPinSyncForWorkspace(nextEntitlement, uid);
-        const syncMessage = await flushWorkspaceCloudSync(nextEntitlement, uid);
-        if (activeUid.current === uid && auth.currentUser?.uid === uid) setMessage(syncMessage);
+        if (authoritativeEntitlement) {
+          try { await flushPinSyncForWorkspace(authoritativeEntitlement, uid); } catch { /* Cloud sync cannot block local use. */ }
+          try { await flushWorkspaceCloudSync(authoritativeEntitlement, uid); } catch { /* Cloud sync cannot block local use. */ }
+        }
       } catch {
-        if (activeUid.current === uid && auth.currentUser?.uid === uid) setMessage('Account state is temporarily unavailable. Local data remains safe.');
+        if (activeUid.current === uid && auth.currentUser?.uid === uid) setAccountStateError('Some saved data could not be refreshed. Your local Surface data remains available.');
       }
     };
     loadWorkspaceRef.current = loadWorkspace;
@@ -99,13 +117,22 @@ function App() {
       if (!nextUser) {
         activeUid.current = null;
         setEntitlement(null); setPinsState([]); setNotesState([]); setMediaState([]);
+        setAccountStateError(''); setGroupMemberships([]); setGroupAccessError('');
         setLegacyStatus(null); setLegacyDialog(null);
         return;
       }
       void loadWorkspace(nextUser);
     });
   }, [configError]);
-  const refreshEntitlement = async () => { if (!user) return; const uid = user.uid; const next = await readSurfaceEntitlement(getSurfaceFirebase().firestore, uid); if (activeUid.current === uid && getSurfaceFirebase().auth.currentUser?.uid === uid) setEntitlement(next); };
+  useEffect(() => {
+    if (!user || configError) return;
+    let active = true;
+    setGroupMemberships([]); setGroupAccessError('');
+    void listMyGroupMemberships(user).then((items) => { if (active && getSurfaceFirebase().auth.currentUser?.uid === user.uid) setGroupMemberships(items); }).catch(() => { if (active) setGroupAccessError('Organization access could not be checked. Retry from Profile.'); });
+    return () => { active = false; };
+  }, [user, configError]);
+  const refreshEntitlement = async () => { if (!user) return; const uid = user.uid; try { const next = await readSurfaceEntitlement(getSurfaceFirebase().firestore, uid); if (activeUid.current === uid && getSurfaceFirebase().auth.currentUser?.uid === uid) { setEntitlement(next); setAccountStateError(''); writeLastKnownEntitlement(uid, next); } } catch { if (activeUid.current === uid) setAccountStateError('Surface could not refresh account and plan status. Local features remain available.'); } };
+  const retryAccountState = () => { if (user) void loadWorkspaceRef.current(user); };
   async function signIn() { try { await signInWithEmailAndPassword(getSurfaceFirebase().auth, email.trim(), password); setMessage(''); } catch { setMessage('Sign in failed. Check your email and password.'); } }
   if (configError) return <main className="phone-shell"><p className="eyebrow">Surface</p><h1>Configuration needed</h1><p>{configError}</p></main>;
   if ((['privacy', 'terms', 'refunds', 'help'] as Route[]).includes(navigation.route)) return <main className="phone-shell app-shell" style={accentStyle}><InformationPage kind={navigation.route as 'privacy' | 'terms' | 'refunds' | 'help'} onBack={() => go(user ? 'profile' : 'home')} /></main>;
@@ -163,7 +190,8 @@ function App() {
     }
   };
   const selectedPin = navigation.id ? pins.find((item) => item.id === navigation.id) : undefined; const selectedNote = navigation.id ? notes.find((item) => item.id === navigation.id) : undefined; const noteCameraId = navigation.route === 'camera' && navigation.id?.startsWith('note:') ? navigation.id.slice(5) : undefined; const pinCameraId = navigation.route === 'camera' && navigation.id?.startsWith('pin:') ? navigation.id.slice(4) : undefined; const noteForPin = navigation.route === 'new-pin' && navigation.id?.startsWith('note:') ? notes.find((item) => item.id === navigation.id!.slice(5)) : undefined; const captureForPin = navigation.route === 'new-pin' && navigation.id && !noteForPin ? media.find((item) => item.id === navigation.id) : undefined; const existingNotePin = noteForPin ? pins.find((item) => item.sourceNoteId === noteForPin.id) : undefined;
-  return <main style={accentStyle} data-tier={visualTier} className={`phone-shell app-shell ${navigation.route === 'home' ? 'home-shell' : ''} ${navigation.route === 'gallery' ? 'gallery-shell' : ''} ${navigation.route === 'camera' ? 'camera-shell' : ''} ${navigation.route === 'surface-pro' ? 'subscription-shell' : ''} ${navigation.route === 'captures' ? 'captures-shell' : ''} ${navigation.route === 'profile' ? 'profile-shell' : ''} ${navigation.route === 'account' ? 'account-shell' : ''} ${navigation.route === 'internal' ? 'internal-shell' : ''} ${['notes', 'new-note', 'edit-note', 'note-detail'].includes(navigation.route) ? 'notes-shell' : ''} ${['pins', 'new-pin', 'edit-pin', 'pin-detail'].includes(navigation.route) ? 'pins-shell' : ''}`}><div className="app-content">{navigation.route === 'internal' && <InternalProvisioningScreen user={user} onBack={() => go('home')} />}{navigation.route === 'home' && <header className="topbar"><button className="brand-button" onClick={() => go('home')}><h1>Surface</h1></button><button className="profile-mark" aria-label="Open Profile" onClick={() => go('profile')}><img src="/surface-logo.svg" alt="" />{entitlement?.tier === 'FREE' && <span className="profile-attention">!</span>}</button></header>}
+  const activeGroupMembership = navigation.id ? groupMemberships.find((entry) => entry.organizationId === navigation.id) : groupMemberships[0];
+  return <main style={accentStyle} data-tier={visualTier} className={`phone-shell app-shell ${navigation.route === 'home' ? 'home-shell' : ''} ${navigation.route === 'gallery' ? 'gallery-shell' : ''} ${navigation.route === 'camera' ? 'camera-shell' : ''} ${navigation.route === 'surface-pro' ? 'subscription-shell' : ''} ${navigation.route === 'captures' ? 'captures-shell' : ''} ${navigation.route === 'profile' ? 'profile-shell' : ''} ${navigation.route === 'account' ? 'account-shell' : ''} ${navigation.route === 'internal' ? 'internal-shell' : ''} ${navigation.route === 'group-tools' ? 'group-tools-shell' : ''} ${['notes', 'new-note', 'edit-note', 'note-detail'].includes(navigation.route) ? 'notes-shell' : ''} ${['pins', 'new-pin', 'edit-pin', 'pin-detail'].includes(navigation.route) ? 'pins-shell' : ''}`}><div className="app-content">{navigation.route === 'internal' && <InternalProvisioningScreen user={user} onBack={() => go('home')} />}{navigation.route === 'group-tools' && (activeGroupMembership ? <GroupToolsScreen user={user} membership={activeGroupMembership} onBack={() => go('profile')} /> : <section className="group-tools-screen"><h2>Group Tools</h2><p>No active Group Plan membership is available for this account.</p><button onClick={() => go('profile')}>Back to Profile</button></section>)}{navigation.route === 'home' && <header className="topbar"><button className="brand-button" onClick={() => go('home')}><h1>Surface</h1></button><button className="profile-mark" aria-label="Open Profile" onClick={() => go('profile')}><img src="/surface-logo.svg" alt="" />{entitlement?.tier === 'FREE' && <span className="profile-attention">!</span>}</button></header>}
     {navigation.route === 'home' && <NativeHome routeTo={go} isPro={entitlement?.tier === 'PRO' || entitlement?.tier === 'MAX'} />}
     {navigation.route === 'pins' && <NativePins pins={pins} media={media} onCreate={() => go('new-pin')} onOpen={(id) => go('pin-detail', id)} onDelete={(id) => { void deleteLocalPin(id); setPins((current) => current.filter((item) => item.id !== id)); if (entitlement && entitlement.tier !== 'FREE') { void queuePinOperation({ id: `delete:${id}`, kind: 'DELETE_PIN', pinId: id }).then(() => flushPinSync(entitlement)); } }} />}
     {navigation.route === 'new-pin' && <PinForm title="Create PIN" initial={noteForPin ? { name: noteForPin.name, phone: noteForPin.phone, about: noteForPin.body, locationLabel: noteForPin.locationLabel } : undefined} sourceMedia={captureForPin} dateKey={noteForPin?.dateKey} locationLabel={noteForPin?.locationLabel ?? formatSurfaceLocation(readSurfaceLocation())} existingPins={pins} pinLimitReached={entitlement?.tier === 'FREE' && pins.length >= 5} existingSourcePinId={existingNotePin?.id} onExisting={() => { if (existingNotePin) go('pin-detail', existingNotePin.id); }} onCancel={() => noteForPin ? go('edit-note', noteForPin.id) : go('pins')} onSave={async (data) => { const pin = await createPin(data.name, data.about, data.phone, data.locationLabel); void recordSurfaceAnalyticsActivity('pin_created'); const linked = captureForPin; const linkedPin = { ...pin, ...(linked ? { mediaIds: [linked.id] } : {}), ...(noteForPin ? { sourceNoteId: noteForPin.id } : {}) }; if (linked) { await putMedia({ ...linked, pinIds: [...new Set([...(linked.pinIds ?? []), linkedPin.id])] }); setMedia((items) => items.map((item) => item.id === linked.id ? { ...item, pinIds: [...new Set([...(item.pinIds ?? []), linkedPin.id])] } : item)); } await putPin(linkedPin); setPins((current) => [linkedPin, ...current]); const paid = entitlement; if (paid && paid.tier !== 'FREE') { await queuePinOperation({ id: `upsert:${linkedPin.id}`, kind: 'UPSERT_PIN', pinId: linkedPin.id, payload: linkedPin }); await flushPinSync(paid); } go('pin-detail', linkedPin.id); }} />}
@@ -180,7 +208,7 @@ function App() {
     {navigation.route === 'camera' && <NativeCamera onBack={() => noteCameraId ? go('edit-note', noteCameraId) : pinCameraId ? go('pin-detail', pinCameraId) : go('home')} location={readSurfaceLocation()} pins={pins} save={async (file, location) => { const item = await saveMedia(file, location, true); void recordSurfaceAnalyticsActivity('capture_created'); return item; }} onSaved={(item) => { setMedia((items) => [item, ...items]); if (entitlement) void uploadMedia(item, entitlement).catch(() => setMessage('Media sync pending.')); const note = noteCameraId ? notes.find((entry) => entry.id === noteCameraId) : undefined; if (note) { const updated = { ...note, imageMediaId: item.id, updatedAt: Date.now() }; void putNote(updated); setNotes((items) => items.map((entry) => entry.id === updated.id ? updated : entry)); if (entitlement) { void queueNote(updated, entitlement).then(() => flushCloudSync(entitlement)); } go('edit-note', updated.id); return; } const pin = pinCameraId ? pins.find((entry) => entry.id === pinCameraId) : undefined; if (pin) { const updated = { ...pin, mediaIds: [...new Set([...(pin.mediaIds ?? []), item.id])], updatedAt: Date.now() }; void putPin(updated); void recordSurfaceAnalyticsActivity('pin_updated'); void putMedia({ ...item, pinIds: [...new Set([...(item.pinIds ?? []), updated.id])] }); setPins((items) => items.map((entry) => entry.id === updated.id ? updated : entry)); setMedia((items) => items.map((entry) => entry.id === item.id ? { ...item, pinIds: [...new Set([...(item.pinIds ?? []), updated.id])] } : entry)); if (entitlement?.tier !== 'FREE') { void queuePinOperation({ id: `upsert:${updated.id}`, kind: 'UPSERT_PIN', pinId: updated.id, payload: updated }).then(() => flushPinSync(entitlement)); } go('pin-detail', updated.id); return; } go('captures'); }} onCreatePin={(item) => { setMedia((items) => [item, ...items]); if (entitlement) void uploadMedia(item, entitlement).catch(() => setMessage('Media sync pending.')); go('new-pin', item.id); }} onConnectExisting={async (item, pinId) => { const pin = pins.find((entry) => entry.id === pinId); if (!pin) return; const updated = { ...pin, mediaIds: [...new Set([...(pin.mediaIds ?? []), item.id])], updatedAt: Date.now() }; await putPin(updated); void recordSurfaceAnalyticsActivity('pin_updated'); await putMedia({ ...item, pinIds: [pinId] }); setPins((current) => current.map((entry) => entry.id === pinId ? updated : entry)); setMedia((current) => [item, ...current]); if (entitlement) void uploadMedia(item, entitlement).catch(() => setMessage('Media sync pending.')); setMessage('Capture connected to PIN.'); go('captures'); }} onMessage={setMessage} />}
     {navigation.route === 'gallery' && <NativeMediaGrid title="Surface Gallery" items={media.filter((item) => !item.capture)} pins={pins} onImport={async (file) => { const item = await saveMedia(file, null, false); setMedia((items) => [item, ...items]); if (entitlement) void uploadMedia(item, entitlement).catch(() => setMessage('Media sync pending.')); }} onDelete={async (id) => { const item = media.find((entry) => entry.id === id); if (item?.pinIds?.length) { setMessage('Remove this image from its PIN before deleting it.'); return; } await deleteMedia(id); setMedia((items) => items.filter((entry) => entry.id !== id)); }} />}
     {navigation.route === 'captures' && <NativeCaptures items={media.filter((item) => item.capture)} pins={pins} onCamera={() => go('camera')} onCreatePin={(id) => go('new-pin', id)} onConnectExisting={async (mediaId, pinId) => { const pin = pins.find((entry) => entry.id === pinId); const item = media.find((entry) => entry.id === mediaId); if (!pin || !item) return; const updated = { ...pin, mediaIds: [...new Set([...(pin.mediaIds ?? []), mediaId])], updatedAt: Date.now() }; await putPin(updated); void recordSurfaceAnalyticsActivity('pin_updated'); await putMedia({ ...item, pinIds: [...new Set([...(item.pinIds ?? []), pinId])] }); setPins((current) => current.map((entry) => entry.id === pinId ? updated : entry)); setMedia((current) => current.map((entry) => entry.id === mediaId ? { ...entry, pinIds: [...new Set([...(entry.pinIds ?? []), pinId])] } : entry)); setMessage('Capture connected to PIN.'); }} onDelete={async (id) => { const item = media.find((entry) => entry.id === id); if (item?.pinIds?.length) { setMessage('Remove this image from its PIN before deleting it.'); return; } await deleteMedia(id); setMedia((items) => items.filter((item) => item.id !== id)); }} />}
-    {navigation.route === 'profile' && <NativeProfile uid={user.uid} name={user.displayName || ''} email={user.email || ''} tier={entitlement?.tier || 'FREE'} onAccount={() => go('account')} onPro={() => go('surface-pro')} onHome={() => go('home')} onEdit={() => go('account')} onInfo={(kind) => go(kind)} />}
+    {navigation.route === 'profile' && <NativeProfile uid={user.uid} name={user.displayName || ''} email={user.email || ''} tier={entitlement?.tier || 'FREE'} groupMemberships={groupMemberships} groupAccessError={groupAccessError} accountStateError={accountStateError} onRetryAccountState={retryAccountState} onRetryGroupAccess={() => { setGroupAccessError(''); void listMyGroupMemberships(user).then(setGroupMemberships).catch(() => setGroupAccessError('Organization access could not be checked. Retry from Profile.')); }} onGroupTools={(membership) => go('group-tools', membership.organizationId)} onAccount={() => go('account')} onPro={() => go('surface-pro')} onHome={() => go('home')} onEdit={() => go('account')} onInfo={(kind) => go(kind)} />}
     {navigation.route === 'account' && <Account user={user} onBack={() => go('profile')} onSignedOut={() => void signOut(getSurfaceFirebase().auth)} setMessage={setMessage} onLegacyRecovery={async () => { const status = await refreshLegacyStatus(); if (status.available && !status.locked) setLegacyDialog('prompt'); }} legacyDataAvailable={Boolean(legacyStatus?.available && !legacyStatus.locked)} />}
     {message && navigation.route !== 'internal' && <p className="message inline-message">{message}</p>}</div>{navigation.route === 'home' && <GroundNav route={navigation.route} routeTo={go} isPro={entitlement?.tier === 'PRO' || entitlement?.tier === 'MAX'} />}{navigation.route !== 'internal' && <LegacyRecoveryDialog mode={legacyDialog} email={user.email ?? ''} onLeave={() => void leaveLegacyData()} onContinue={() => setLegacyDialog('confirm')} onCancel={() => setLegacyDialog('prompt')} onMove={() => void moveLegacyData()} onRetry={() => void moveLegacyData()} />}</main>;
 }

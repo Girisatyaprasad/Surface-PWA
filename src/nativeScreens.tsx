@@ -6,6 +6,7 @@ import { mediaDisplayBlob, objectUrl, type SurfaceMedia } from './media';
 import { acquireSurfaceLocation, formatCoordinateGeotag, formatSurfaceLocation, isRecentSurfaceLocation, readSurfaceLocation, snapshotSurfaceLocation, type SurfaceLocation } from './location';
 import { snapshotCameraCaptureMetadata } from './captureMetadata';
 import { SurfaceDialog } from './SurfaceDialog';
+import type { GroupToolsMembership } from './organizations/groupToolsApi';
 
 export type NativeRoute = 'home' | 'gallery' | 'notes' | 'camera' | 'captures' | 'pins' | 'profile' | 'account' | 'surface-pro' | 'new-pin' | 'new-note' | 'search';
 
@@ -190,7 +191,7 @@ export function NativeViewer({ items, index, mode = 'pin', onClose, onChange, on
   return <div className={`native-media-viewer native-media-viewer--${mode}`} role="dialog" aria-modal="true" aria-label="Image viewer"><div ref={stageRef} className="native-viewer-stage" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { pointers.current.clear(); gesture.current = null; }}><img src={objectUrl(current.processed)} alt="" draggable={false} style={{ transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})` }} /></div><header className="native-viewer-header"><button className="native-viewer-button" onClick={onClose}>Back</button>{mode === 'gallery' && onDelete && <button className="native-viewer-button" onClick={() => setConfirmDelete(true)}>Delete</button>}{mode === 'pin' && <div>{activeIndex > 0 && <button className="native-viewer-button" onClick={() => change(activeIndex - 1)}>Previous</button>}{activeIndex < items.length - 1 && <button className="native-viewer-button" onClick={() => change(activeIndex + 1)}>Next</button>}</div>}</header>{confirmDelete && <SurfaceDialog className="surface-dialog--gallery" labelledBy="viewer-gallery-delete-title"><strong id="viewer-gallery-delete-title">Delete this Gallery item?</strong><div className="surface-dialog-actions"><button className="surface-dialog-cancel" onClick={() => setConfirmDelete(false)}>Cancel</button><button className="surface-dialog-gallery-confirm" onClick={onDelete}>Delete</button></div></SurfaceDialog>}</div>;
 }
 
-export function NativeProfile({ uid, name, email, tier, onAccount, onPro, onHome, onEdit, onInfo }: { uid: string; name: string; email: string; tier: string; onAccount: () => void; onPro: () => void; onHome: () => void; onEdit: () => void; onInfo: (kind: 'privacy' | 'terms' | 'refunds' | 'help') => void }) {
+export function NativeProfile({ uid, name, email, tier, groupMemberships, groupAccessError, accountStateError, onRetryAccountState, onRetryGroupAccess, onGroupTools, onAccount, onPro, onHome, onEdit, onInfo }: { uid: string; name: string; email: string; tier: string; groupMemberships: GroupToolsMembership[]; groupAccessError: string; accountStateError: string; onRetryAccountState: () => void; onRetryGroupAccess: () => void; onGroupTools: (membership: GroupToolsMembership) => void; onAccount: () => void; onPro: () => void; onHome: () => void; onEdit: () => void; onInfo: (kind: 'privacy' | 'terms' | 'refunds' | 'help') => void }) {
   const [more, setMore] = useState(false);
   const [cloudName, setCloudName] = useState<string | null>(null);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -203,6 +204,10 @@ export function NativeProfile({ uid, name, email, tier, onAccount, onPro, onHome
     <div className="native-profile-summary"><div className="native-avatar">{photoUri ? <img className="native-avatar-photo" src={photoUri} alt="" /> : <img className="native-avatar-logo" src="/surface-logo.svg" alt="Surface" />}</div><div><strong>{displayName}</strong><small>User name</small><span className={tier === 'FREE' ? 'profile-plan profile-plan--free' : 'profile-plan'}>{plan}</span></div></div>
     <h3>Account</h3>
     <div className="native-credentials"><small>Credentials</small><strong>{email || 'Firebase account'}</strong></div>
+    <section className="profile-plan-section"><h3>Personal plan</h3><p>{tier === 'MAX' ? 'Max' : tier === 'PRO' ? 'Pro' : 'Free'}</p></section>
+    {groupMemberships.map((membership) => <section className="profile-group-card" key={membership.organizationId}><small>Organization</small><strong>{membership.organizationName}</strong><span>Group Plan • Active</span><span>{membership.surfaceRole.replaceAll('_', ' ')}</span>{membership.groupName && <span>{membership.groupName}</span>}<button type="button" onClick={() => onGroupTools(membership)}>Open Group Tools</button></section>)}
+    {groupAccessError && <div className="profile-account-status" role="status"><p>{groupAccessError}</p><button onClick={onRetryGroupAccess}>Retry</button></div>}
+    {accountStateError && <div className="profile-account-status" role="status"><p>{accountStateError}</p><button onClick={onRetryAccountState}>Retry account status</button></div>}
     <NativeProfileRow title="Account" onClick={onAccount} />
     <NativeProfileRow title={more ? 'Hide more' : 'More'} onClick={() => setMore((value) => !value)} />
     {more && <div className="native-profile-more"><NativeProfileRow title="Subscriptions" onClick={onPro} />{['Website', 'Instagram', 'Privacy Policy', 'Terms & Conditions', 'Refund & Cancellation', 'Help', 'Feedback'].map((item) => <NativeProfileRow key={item} title={item} onClick={() => open(item)} />)}</div>}
