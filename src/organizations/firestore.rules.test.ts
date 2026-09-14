@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, afterAll, describe, it } from 'vitest';
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, Timestamp, updateDoc } from 'firebase/firestore';
 
 let environment: RulesTestEnvironment;
 const firestoreRules = readFileSync(new URL('../../../Surface/firestore.rules', import.meta.url), 'utf8');
@@ -42,12 +42,13 @@ beforeEach(async () => {
       setDoc(doc(db, 'organizations/org-1/organizationIisAnalysis/30d'), { organizationId: 'org-1', analysisCode: 'CONSISTENCY_DECLINING' }),
       setDoc(doc(db, 'organizations/org-1/memberAnalytics/target2_2026'), { organizationId: 'org-1', uid: 'target2', peopleAdded: 1, activePins: 1, eventsCreated: 0 }),
       setDoc(doc(db, 'users/target'), { proStatus: 'UNPAID', planId: null, activatedAt: null, expiresAt: null, phoneNumber: '+919876543210', displayName: 'Private Name' }),
-      setDoc(doc(db, 'users/target/pins/private-pin'), { uid: 'target', name: 'Private prospect', phone: '9876543210', about: 'Private context', locationLabel: 'Private location' }),
-      setDoc(doc(db, 'users/target/notes/private-note'), { uid: 'target', body: 'Private note content' }),
+      setDoc(doc(db, 'users/target/pins/private-pin'), { id: 'private-pin', uid: 'target', name: 'Private prospect', phone: '9876543210', about: 'Private context', locationLabel: 'Private location' }),
+      setDoc(doc(db, 'users/target/notes/private-note'), { id: 'private-note', uid: 'target', body: 'Private note content' }),
       setDoc(doc(db, 'users/target/media/private-media'), { uid: 'target', originalPath: 'private/photo.jpg', processedPath: 'private/processed.jpg' }),
+      setDoc(doc(db, 'users/max-expired'), { proStatus: 'PRO_ACTIVE', planId: 'surface_max_1period', expiresAt: Timestamp.fromMillis(Date.now() - 60_000) }),
       setDoc(doc(db, 'users/member/personalAnalytics/2026'), { peopleAdded: 2, eventsCreated: 0 }),
     ]);
-    for (const [uid, proStatus, planId] of [['tier-free', 'UNPAID', null], ['tier-pro', 'PRO_ACTIVE', 'PRO_MONTHLY'], ['tier-max', 'PRO_ACTIVE', 'MAX_MONTHLY']] as const) {
+    for (const [uid, proStatus, planId] of [['tier-free', 'UNPAID', null], ['tier-pro', 'PRO_ACTIVE', 'surface_pro_1period'], ['tier-max', 'PRO_ACTIVE', 'surface_max_1period']] as const) {
       await setDoc(doc(db, `users/${uid}`), { proStatus, planId, activatedAt: null, expiresAt: null });
     }
   });
@@ -56,6 +57,43 @@ beforeEach(async () => {
 afterAll(async () => environment?.cleanup());
 
 const ref = (uid: string, path: string) => doc(environment.authenticatedContext(uid).firestore(), path);
+
+  it('lets an owner read and write only their own Notes and PINs', async () => {
+    await assertSucceeds(getDoc(ref('target', 'users/target/pins/private-pin')));
+    await assertSucceeds(getDoc(ref('target', 'users/target/notes/private-note')));
+    await assertSucceeds(updateDoc(ref('target', 'users/target/pins/private-pin'), { about: 'Updated by owner' }));
+    await assertSucceeds(setDoc(ref('target', 'users/target/notes/owner-note'), { id: 'owner-note', uid: 'target', body: 'Owner note' }));
+    await assertFails(getDoc(ref('target', 'users/member/pins/private-pin')));
+    await assertFails(setDoc(ref('target', 'users/member/pins/injected'), { id: 'injected', uid: 'target', name: 'Wrong path' }));
+    await assertFails(setDoc(ref('target', 'users/target/pins/wrong-id'), { id: 'another-id', uid: 'target', name: 'Wrong document ID' }));
+  });
+
+  it('allows only an active personal Max owner to access valid private media metadata', async () => {
+    const metadata = {
+      uid: 'tier-max', mediaId: 'media-1', type: 'capture',
+      originalPath: 'users/tier-max/media/media-1/original',
+      processedPath: 'users/tier-max/media/media-1/processed', originalMimeType: 'image/png', originalSize: 42,
+      mimeType: 'image/jpeg', size: 40, createdAt: Date.now(), updatedAt: Date.now(), dateKey: '14/09/2026',
+      timeLabel: '10:00 am', locationLabel: '', location: null, capture: true, pinIds: [], revision: Date.now(),
+      updatedByDeviceId: 'test-device',
+    };
+    const ownerDoc = ref('tier-max', 'users/tier-max/media/media-1');
+    await assertSucceeds(setDoc(ownerDoc, metadata));
+    await assertSucceeds(getDoc(ownerDoc));
+    await assertSucceeds(getDocs(collection(environment.authenticatedContext('tier-max').firestore(), 'users/tier-max/media')));
+    await assertSucceeds(updateDoc(ownerDoc, { locationLabel: 'Private owner label' }));
+    await assertFails(getDoc(ref('tier-pro', 'users/tier-max/media/media-1')));
+    await assertFails(setDoc(ref('tier-max', 'users/tier-max/media/forged'), { ...metadata, mediaId: 'forged', processedPath: 'users/tier-max/media/other/processed' }));
+    await assertFails(setDoc(ref('tier-pro', 'users/tier-pro/media/pro-media'), { ...metadata, uid: 'tier-pro', mediaId: 'pro-media', originalPath: 'users/tier-pro/media/pro-media/original', processedPath: 'users/tier-pro/media/pro-media/processed' }));
+    await assertFails(setDoc(ref('max-expired', 'users/max-expired/media/expired'), { ...metadata, uid: 'max-expired', mediaId: 'expired', originalPath: 'users/max-expired/media/expired/original', processedPath: 'users/max-expired/media/expired/processed' }));
+  });
+
+  it('denies private Notes and PINs to unauthenticated users and keeps media owner-private', async () => {
+    const db = environment.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(db, 'users/target/pins/private-pin')));
+    await assertFails(getDoc(doc(db, 'users/target/notes/private-note')));
+    await assertFails(getDoc(ref('target', 'users/target/media/private-media')));
+  });
 
   it('lets members read their own personal analytics but not another member private records', async () => {
     await assertSucceeds(getDoc(ref('member', 'users/member/personalAnalytics/2026')));

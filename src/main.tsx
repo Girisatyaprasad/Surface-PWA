@@ -41,7 +41,7 @@ const routeFromHash = (): { route: Route; id?: string } => { const hashValue = w
 
 function App() {
   const [user, setUser] = useState<User | null>(null); const [navigation, setNavigation] = useState(routeFromHash); const [pins, setPinsState] = useState<Pin[]>([]); const [notes, setNotesState] = useState<Note[]>([]); const [media, setMediaState] = useState<SurfaceMedia[]>([]);
-  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [message, setMessage] = useState(() => consumePasswordResetReturn(window.location, window.history) ? 'Password changed. Sign in with your new password.' : ''); const [authMode, setAuthMode] = useState<'sign-in' | 'recovery' | 'create-account'>('sign-in'); const [entitlement, setEntitlement] = useState<SurfaceEntitlement | null>(null); const [accountStateError, setAccountStateError] = useState(''); const [groupMemberships, setGroupMemberships] = useState<GroupToolsMembership[]>([]); const [groupAccessError, setGroupAccessError] = useState(''); const configError = firebaseConfigError();
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [message, setMessage] = useState(() => consumePasswordResetReturn(window.location, window.history) ? 'Password changed. Sign in with your new password.' : ''); const [authMode, setAuthMode] = useState<'sign-in' | 'recovery' | 'create-account'>('sign-in'); const [entitlement, setEntitlement] = useState<SurfaceEntitlement | null>(null); const [verifiedEntitlementUid, setVerifiedEntitlementUid] = useState<string | null>(null); const [accountStateError, setAccountStateError] = useState(''); const [groupMemberships, setGroupMemberships] = useState<GroupToolsMembership[]>([]); const [groupAccessError, setGroupAccessError] = useState(''); const configError = firebaseConfigError();
   const signupPending = useRef(false);
   const activeUid = useRef<string | null>(null);
   const loadWorkspaceRef = useRef<(nextUser: User) => Promise<void>>(async () => undefined);
@@ -65,6 +65,7 @@ function App() {
     const loadWorkspace = async (nextUser: User) => {
       const uid = requireWorkspaceUid(nextUser.uid);
       activeUid.current = uid;
+      setVerifiedEntitlementUid(null);
       setPinsState([]); setNotesState([]); setMediaState([]);
       const cachedEntitlement = readLastKnownEntitlement(uid);
       setEntitlement(cachedEntitlement);
@@ -76,6 +77,7 @@ function App() {
         authoritativeEntitlement = await readSurfaceEntitlement(firestore, uid);
         if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
         setEntitlement(authoritativeEntitlement);
+        setVerifiedEntitlementUid(uid);
         writeLastKnownEntitlement(uid, authoritativeEntitlement);
       } catch {
         refreshIssues.push('Surface could not refresh account and plan status.');
@@ -94,14 +96,6 @@ function App() {
       if (cloudResults[0].status === 'fulfilled') setNotesState(cloudResults[0].value);
       if (cloudResults[1].status === 'fulfilled') setPinsState(cloudResults[1].value);
       if (cloudResults.some((result) => result.status === 'rejected')) refreshIssues.push('Cloud Notes or PINs could not refresh. Their local copies remain available.');
-
-      const mediaHydration = await Promise.allSettled([hydrateWorkspaceMedia(dataEntitlement, uid)]);
-      if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
-      if (mediaHydration[0].status === 'rejected') refreshIssues.push('Cloud media could not refresh. Local media remains available.');
-      const refreshedMedia = await Promise.allSettled([listWorkspaceMedia(uid)]);
-      if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
-      if (refreshedMedia[0].status === 'fulfilled') setMediaState(refreshedMedia[0].value);
-      else refreshIssues.push('Some local media could not be loaded. Other local Surface data remains available.');
 
       try {
         const recovery = await getLegacyRecoveryStatus(uid);
@@ -127,6 +121,7 @@ function App() {
       setUser(nextUser);
       if (!nextUser) {
         activeUid.current = null;
+        setVerifiedEntitlementUid(null);
         setEntitlement(null); setPinsState([]); setNotesState([]); setMediaState([]);
         setAccountStateError(''); setGroupMemberships([]); setGroupAccessError('');
         setLegacyStatus(null); setLegacyDialog(null);
@@ -136,6 +131,36 @@ function App() {
       void loadWorkspace(nextUser);
     });
   }, [configError]);
+  useEffect(() => {
+    if (!user || !entitlement || entitlement.tier !== 'MAX' || verifiedEntitlementUid !== user.uid || configError) return;
+    let active = true;
+    let busy = false;
+    let hydrationTimer = 0;
+    const refreshMediaCloud = async () => {
+      if (!active || busy || !navigator.onLine || getSurfaceFirebase().auth.currentUser?.uid !== user.uid) return;
+      busy = true;
+      try {
+        const moreToHydrate = await hydrateWorkspaceMedia(entitlement, user.uid);
+        if (!active || getSurfaceFirebase().auth.currentUser?.uid !== user.uid) return;
+        const refreshed = await listWorkspaceMedia(user.uid);
+        if (!active || getSurfaceFirebase().auth.currentUser?.uid !== user.uid) return;
+        setMediaState((current) => {
+          const byId = new Map(refreshed.map((item) => [item.id, item]));
+          for (const item of current) if (!byId.has(item.id)) byId.set(item.id, item);
+          return [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
+        });
+        await flushWorkspaceCloudSync(entitlement, user.uid);
+        if (moreToHydrate && active) hydrationTimer = window.setTimeout(() => { void refreshMediaCloud(); }, 1_500);
+      } catch { /* Cloud media remains queued; the local workspace is unaffected. */ }
+      finally { busy = false; }
+    };
+    const onResume = () => { void refreshMediaCloud(); };
+    window.addEventListener('online', onResume);
+    document.addEventListener('visibilitychange', onResume);
+    const timer = window.setInterval(onResume, 30_000);
+    void refreshMediaCloud();
+    return () => { active = false; window.clearInterval(timer); window.clearTimeout(hydrationTimer); window.removeEventListener('online', onResume); document.removeEventListener('visibilitychange', onResume); };
+  }, [user, entitlement, verifiedEntitlementUid, configError]);
   useEffect(() => {
     if (!user || configError) return;
     let active = true;

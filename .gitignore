@@ -8,3 +8,4 @@ dist/
 *-debug.log
 *.log
 .firebase/
+emulator-rules/

@@ -70,6 +70,10 @@ async function databaseFor(uid: string): Promise<IDBPDatabase<SurfaceDb>> {
 export type LocalAnalyticsActivity = SurfaceDb['analyticsActivity']['value'];
 export type PendingAnalyticsSnapshot = SurfaceDb['analyticsOutbox']['value'];
 export type SyncOperation = SurfaceDb['syncOperations']['value'];
+
+export class MediaSyncQueueFullError extends Error {
+  constructor() { super('Cloud media queue is full; the local copy is safe.'); this.name = 'MediaSyncQueueFullError'; }
+}
 export type PendingIisInsight = SurfaceDb['iisOutbox']['value'];
 const MAX_PENDING_IIS_INSIGHTS = 100;
 
@@ -204,7 +208,31 @@ export async function insertPinIfAbsent(uid: string, pin: Pin): Promise<boolean>
 export async function queuePinOperation(uid: string, operation: Omit<SyncOperation, 'attempts' | 'nextAttemptAt'>): Promise<void> {
   await (await databaseFor(uid)).put('syncOperations', { ...operation, attempts: 0, nextAttemptAt: Date.now() });
 }
+export async function queueMediaOperation(uid: string, operation: Omit<SyncOperation, 'attempts' | 'nextAttemptAt'>, maxPending = 250, maxBytes = 250 * 1024 * 1024): Promise<void> {
+  const db = await databaseFor(uid);
+  const tx = db.transaction('syncOperations', 'readwrite');
+  const existing = await tx.store.get(operation.id);
+  const pending = await tx.store.getAll();
+  const mediaPending = pending.filter((item) => (item.kind === 'UPSERT_MEDIA' || item.kind === 'DELETE_MEDIA') && item.id !== operation.id);
+  const pendingBytes = mediaPending.reduce((total, item) => {
+    const payload = item.payload as { original?: Blob; processed?: Blob } | undefined;
+    return total + (payload?.original?.size ?? 0) + (payload?.processed?.size ?? 0);
+  }, 0);
+  const payload = operation.payload as { original?: Blob; processed?: Blob } | undefined;
+  const addedBytes = (payload?.original?.size ?? 0) + (payload?.processed?.size ?? 0);
+  const currentMediaCount = mediaPending.length + (existing && (existing.kind === 'UPSERT_MEDIA' || existing.kind === 'DELETE_MEDIA') ? 1 : 0);
+  if ((!existing && currentMediaCount >= maxPending) || pendingBytes + addedBytes > maxBytes) {
+    await tx.done;
+    throw new MediaSyncQueueFullError();
+  }
+  await tx.store.put({ ...operation, attempts: existing?.attempts ?? 0, nextAttemptAt: Date.now() });
+  await tx.done;
+}
 export async function listSyncOperations(uid: string): Promise<SyncOperation[]> { return (await databaseFor(uid)).getAll('syncOperations'); }
+export async function dueSyncOperations(uid: string, now = Date.now(), limit = 50): Promise<SyncOperation[]> {
+  return (await databaseFor(uid)).getAllFromIndex('syncOperations', 'by-next-attempt', IDBKeyRange.upperBound(now), limit);
+}
+export async function getSyncOperation(uid: string, id: string): Promise<SyncOperation | undefined> { return (await databaseFor(uid)).get('syncOperations', id); }
 export async function pendingPinOperations(uid: string): Promise<SyncOperation[]> {
   return (await databaseFor(uid)).getAllFromIndex('syncOperations', 'by-next-attempt', IDBKeyRange.upperBound(Date.now()));
 }

@@ -10,6 +10,7 @@ const required = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
 };
@@ -19,6 +20,7 @@ export function firebaseConfigError(): string | null {
     .filter(([, value]) => typeof value !== 'string' || value.trim() === '')
     .map(([key]) => key);
   if (required.projectId !== 'adms-by-giri') missing.push('projectId must be adms-by-giri');
+  if (required.storageBucket !== 'adms-by-giri.firebasestorage.app') missing.push('storageBucket must be adms-by-giri.firebasestorage.app');
   return missing.length ? `Firebase configuration is incomplete: ${missing.join(', ')}` : null;
 }
 
@@ -37,5 +39,5 @@ export function getSurfaceFirebase() {
   const app = getApps().length ? getApp() : initializeApp(required);
   const auth = getAuth(app);
   void setPersistence(auth, browserLocalPersistence);
-  return { auth, firestore: getFirestore(app) };
+  return { app, auth, firestore: getFirestore(app) };
 }
