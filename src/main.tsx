@@ -11,7 +11,7 @@ import { flushPinSync as flushPinSyncNow, hydratePins } from './sync';
 import { normalizeIndianMobile, paymentAmount, type PaymentTier } from './payments';
 import { deleteMedia as deleteWorkspaceMedia, listMedia as listWorkspaceMedia, objectUrl, putMedia as putWorkspaceMedia, saveMedia as saveWorkspaceMedia, type SurfaceMedia } from './media';
 import { formatSurfaceLocation, readSurfaceLocation, type SurfaceLocation } from './location';
-import { flushCloudSync as flushWorkspaceCloudSync, hydrateMediaMetadata as hydrateWorkspaceMedia, hydrateNotes as hydrateWorkspaceNotes, queueNote as queueWorkspaceNote, queueNoteDelete as queueWorkspaceNoteDelete, uploadMedia as uploadWorkspaceMedia } from './cloudSync';
+import { flushCloudSync as flushWorkspaceCloudSync, hydrateMediaMetadata as hydrateWorkspaceMedia, hydrateNotes as hydrateWorkspaceNotes, queueMediaDeletion as queueWorkspaceMediaDeletion, queueNote as queueWorkspaceNote, queueNoteDelete as queueWorkspaceNoteDelete, uploadMedia as uploadWorkspaceMedia } from './cloudSync';
 import { NativeCamera, NativeCaptures, NativeHome, NativeMediaGrid, NativeNotes, NativePins, NativeProfile, NativeViewer } from './nativeScreens';
 import { SurfaceDialog } from './SurfaceDialog';
 import { InformationPage } from './InformationPages';
@@ -188,7 +188,11 @@ function App() {
   const listMedia = () => listWorkspaceMedia(workspaceUid);
   const saveMedia = (file: Blob, location?: SurfaceLocation | null, capture = true) => saveWorkspaceMedia(workspaceUid, file, location, capture);
   const putMedia = (item: SurfaceMedia) => putWorkspaceMedia(workspaceUid, item);
-  const deleteMedia = (id: string) => deleteWorkspaceMedia(workspaceUid, id);
+  const deleteMedia = async (id: string) => {
+    await deleteWorkspaceMedia(workspaceUid, id);
+    await queueWorkspaceMediaDeletion(id, workspaceUid);
+    if (entitlement) void flushWorkspaceCloudSync(entitlement, workspaceUid);
+  };
   const flushPinSync = (plan: SurfaceEntitlement | null) => flushPinSyncForWorkspace(plan, workspaceUid);
   const recordSurfaceAnalyticsActivity = (kind: Parameters<typeof recordSurfaceAnalyticsActivityInWorkspace>[1]) => recordSurfaceAnalyticsActivityInWorkspace(workspaceUid, kind);
   const queueNote = (note: Note, plan: SurfaceEntitlement) => queueWorkspaceNote(note, plan, workspaceUid);

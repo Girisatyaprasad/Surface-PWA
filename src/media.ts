@@ -6,16 +6,20 @@ export type SurfaceMedia = { id: string; original: Blob; processed: Blob; create
 interface MediaDb extends DBSchema {
   workspaceMetadata: { key: string; value: { key: 'ownerUid'; uid: string } };
   media: { key: string; value: SurfaceMedia; indexes: { 'by-created': number } };
+  mediaDeletions: { key: string; value: { id: string; deletedAt: number } };
 }
 const databases = new Map<string, Promise<IDBPDatabase<MediaDb>>>();
 async function databaseFor(uid: string): Promise<IDBPDatabase<MediaDb>> {
   const ownerUid = requireWorkspaceUid(uid);
   let pending = databases.get(ownerUid);
   if (!pending) {
-    pending = openDB<MediaDb>(workspaceDatabaseName('media', ownerUid), 1, { upgrade(database) {
-      database.createObjectStore('workspaceMetadata', { keyPath: 'key' });
-      const store = database.createObjectStore('media', { keyPath: 'id' });
-      store.createIndex('by-created', 'createdAt');
+    pending = openDB<MediaDb>(workspaceDatabaseName('media', ownerUid), 2, { upgrade(database) {
+      if (!database.objectStoreNames.contains('workspaceMetadata')) database.createObjectStore('workspaceMetadata', { keyPath: 'key' });
+      if (!database.objectStoreNames.contains('media')) {
+        const store = database.createObjectStore('media', { keyPath: 'id' });
+        store.createIndex('by-created', 'createdAt');
+      }
+      if (!database.objectStoreNames.contains('mediaDeletions')) database.createObjectStore('mediaDeletions', { keyPath: 'id' });
     } }).then(async (database) => {
       const metadata = await database.get('workspaceMetadata', 'ownerUid');
       verifyWorkspaceOwner(ownerUid, metadata?.uid, await database.count('media') > 0);
@@ -67,7 +71,16 @@ export async function saveMedia(uid: string, file: Blob, location?: SurfaceLocat
   });
   return item;
 }
-export async function deleteMedia(uid: string, id: string): Promise<void> { await (await databaseFor(uid)).delete('media', id); }
+export async function deleteMedia(uid: string, id: string): Promise<void> {
+  const db = await databaseFor(uid);
+  const tx = db.transaction(['media', 'mediaDeletions'], 'readwrite');
+  await tx.objectStore('media').delete(id);
+  await tx.objectStore('mediaDeletions').put({ id, deletedAt: Date.now() });
+  const tombstones = (await tx.objectStore('mediaDeletions').getAll()).sort((a, b) => b.deletedAt - a.deletedAt);
+  for (const tombstone of tombstones.slice(1000)) await tx.objectStore('mediaDeletions').delete(tombstone.id);
+  await tx.done;
+}
+export async function isMediaDeleted(uid: string, id: string): Promise<boolean> { return Boolean(await (await databaseFor(uid)).get('mediaDeletions', id)); }
 export async function putMedia(uid: string, item: SurfaceMedia): Promise<void> { await (await databaseFor(uid)).put('media', item); }
 export async function insertMediaIfAbsent(uid: string, item: SurfaceMedia): Promise<boolean> {
   const tx = (await databaseFor(uid)).transaction('media', 'readwrite');

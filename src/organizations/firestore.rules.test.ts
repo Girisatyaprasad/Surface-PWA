@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, afterAll, describe, it } from 'vitest';
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc, Timestamp, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, Timestamp, updateDoc } from 'firebase/firestore';
 
 let environment: RulesTestEnvironment;
 const firestoreRules = readFileSync(new URL('../../../Surface/firestore.rules', import.meta.url), 'utf8');
@@ -45,6 +45,7 @@ beforeEach(async () => {
       setDoc(doc(db, 'users/target/pins/private-pin'), { id: 'private-pin', uid: 'target', name: 'Private prospect', phone: '9876543210', about: 'Private context', locationLabel: 'Private location' }),
       setDoc(doc(db, 'users/target/notes/private-note'), { id: 'private-note', uid: 'target', body: 'Private note content' }),
       setDoc(doc(db, 'users/target/media/private-media'), { uid: 'target', originalPath: 'private/photo.jpg', processedPath: 'private/processed.jpg' }),
+      setDoc(doc(db, 'users/max-expired/media/private-media'), { uid: 'max-expired', mediaId: 'private-media' }),
       setDoc(doc(db, 'users/max-expired'), { proStatus: 'PRO_ACTIVE', planId: 'surface_max_1period', expiresAt: Timestamp.fromMillis(Date.now() - 60_000) }),
       setDoc(doc(db, 'users/member/personalAnalytics/2026'), { peopleAdded: 2, eventsCreated: 0 }),
     ]);
@@ -86,6 +87,8 @@ const ref = (uid: string, path: string) => doc(environment.authenticatedContext(
     await assertFails(setDoc(ref('tier-max', 'users/tier-max/media/forged'), { ...metadata, mediaId: 'forged', processedPath: 'users/tier-max/media/other/processed' }));
     await assertFails(setDoc(ref('tier-pro', 'users/tier-pro/media/pro-media'), { ...metadata, uid: 'tier-pro', mediaId: 'pro-media', originalPath: 'users/tier-pro/media/pro-media/original', processedPath: 'users/tier-pro/media/pro-media/processed' }));
     await assertFails(setDoc(ref('max-expired', 'users/max-expired/media/expired'), { ...metadata, uid: 'max-expired', mediaId: 'expired', originalPath: 'users/max-expired/media/expired/original', processedPath: 'users/max-expired/media/expired/processed' }));
+    await assertSucceeds(deleteDoc(ref('max-expired', 'users/max-expired/media/private-media')));
+    await assertFails(deleteDoc(ref('tier-pro', 'users/tier-max/media/media-1')));
   });
 
   it('denies private Notes and PINs to unauthenticated users and keeps media owner-private', async () => {

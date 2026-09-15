@@ -8,6 +8,8 @@ const state = vi.hoisted(() => ({
   uploaded: new Map<string, { blob: Blob; contentType: string }>(),
   objects: new Map<string, Blob>(),
   metadata: new Map<string, any>(),
+  deletedIds: new Set<string>(),
+  deletedObjects: new Set<string>(),
   afterBlobRead: null as null | (() => void),
 }));
 
@@ -16,6 +18,7 @@ vi.mock('firebase/storage', () => ({
   getStorage: vi.fn(() => ({})),
   ref: vi.fn((_storage: unknown, fullPath: string) => ({ fullPath })),
   uploadBytes: vi.fn(async (reference: { fullPath: string }, blob: Blob, metadata: { contentType: string }) => { state.uploaded.set(reference.fullPath, { blob, contentType: metadata.contentType }); }),
+  deleteObject: vi.fn(async (reference: { fullPath: string }) => { state.deletedObjects.add(reference.fullPath); }),
   getBlob: vi.fn(async (reference: { fullPath: string }) => {
     const blob = state.objects.get(reference.fullPath);
     if (!blob) throw new Error('Object not found');
@@ -29,6 +32,7 @@ vi.mock('firebase/firestore', () => ({
   getDocs: vi.fn(async (target: { path: string }) => ({ docs: [...state.remoteMedia.entries()].filter(([path]) => path.startsWith(`${target.path}/`)).map(([path, value]) => ({ id: path.split('/').at(-1), data: () => value })) })),
   runTransaction: vi.fn(),
   setDoc: vi.fn(async (target: { path: string }, value: unknown) => { state.metadata.set(target.path, value); }),
+  deleteDoc: vi.fn(async (target: { path: string }) => { state.metadata.delete(target.path); }),
 }));
 vi.mock('./db', () => ({
   dueSyncOperations: vi.fn(async () => [...state.operations.values()].filter((item) => item.nextAttemptAt <= Date.now())),
@@ -44,9 +48,10 @@ vi.mock('./db', () => ({
 vi.mock('./media', () => ({
   listMedia: vi.fn(async () => [...state.localMedia.values()]),
   putMedia: vi.fn(async (_uid: string, item: any) => { state.localMedia.set(item.id, item); }),
+  isMediaDeleted: vi.fn(async (_uid: string, id: string) => state.deletedIds.has(id)),
 }));
 
-import { flushCloudSync, hydrateMediaBlob, hydrateMediaMetadata, uploadMedia, validateCloudMedia } from './cloudSync';
+import { flushCloudSync, hydrateMediaBlob, hydrateMediaMetadata, queueMediaDeletion, uploadMedia, validateCloudMedia } from './cloudSync';
 import type { SurfaceEntitlement } from './entitlement';
 import type { SurfaceMedia } from './media';
 
@@ -60,7 +65,7 @@ function media(id = 'media-1', original = new Blob(['original'], { type: 'image/
 describe('Max cloud media pipeline', () => {
   beforeEach(() => {
     state.currentUid = 'max-owner'; state.operations.clear(); state.localMedia.clear(); state.remoteMedia.clear();
-    state.uploaded.clear(); state.objects.clear(); state.metadata.clear(); state.afterBlobRead = null;
+    state.uploaded.clear(); state.objects.clear(); state.metadata.clear(); state.deletedIds.clear(); state.deletedObjects.clear(); state.afterBlobRead = null;
     vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
   });
 
@@ -108,6 +113,23 @@ describe('Max cloud media pipeline', () => {
     expect(state.metadata.get('users/max-owner/media/media-1')).toMatchObject({ uid: 'max-owner', mediaId: 'media-1', type: 'capture', mimeType: 'image/jpeg', originalPath: 'users/max-owner/media/media-1/original', processedPath: 'users/max-owner/media/media-1/processed' });
   });
 
+  it('replaces a pending upload with one durable delete operation', async () => {
+    state.operations.set('media:media-1', { id: 'media:media-1', kind: 'UPSERT_MEDIA', pinId: 'media-1', payload: media(), attempts: 0, nextAttemptAt: Date.now() });
+    await queueMediaDeletion('media-1', 'max-owner');
+    expect(state.operations.get('media:media-1')).toMatchObject({ kind: 'DELETE_MEDIA', pinId: 'media-1', payload: { mediaId: 'media-1' } });
+  });
+
+  it('deletes both cloud variants and metadata, and is allowed for a downgraded owner', async () => {
+    state.uploaded.set('users/max-owner/media/media-1/original', { blob: new Blob(), contentType: 'image/png' });
+    state.uploaded.set('users/max-owner/media/media-1/processed', { blob: new Blob(), contentType: 'image/jpeg' });
+    state.metadata.set('users/max-owner/media/media-1', { uid: 'max-owner' });
+    state.operations.set('media:media-1', { id: 'media:media-1', kind: 'DELETE_MEDIA', pinId: 'media-1', payload: { mediaId: 'media-1' }, attempts: 0, nextAttemptAt: Date.now() });
+    await flushCloudSync(free, 'max-owner');
+    expect([...state.deletedObjects].sort()).toEqual(['users/max-owner/media/media-1/original', 'users/max-owner/media/media-1/processed']);
+    expect(state.metadata.has('users/max-owner/media/media-1')).toBe(false);
+    expect(state.operations.has('media:media-1')).toBe(false);
+  });
+
   it('does not upload after Firebase account ownership changes', async () => {
     state.currentUid = 'another-user';
     await uploadMedia(media(), max, 'max-owner');
@@ -137,6 +159,15 @@ describe('Max cloud media pipeline', () => {
     state.objects.set(remote.originalPath!, new Blob(['raw'], { type: 'image/jpeg' }));
     state.objects.set(remote.processedPath!, new Blob(['processed'], { type: 'image/jpeg' }));
     state.afterBlobRead = () => { state.currentUid = 'other-user'; };
+    await hydrateMediaBlob('max-owner', remote, max);
+    expect(state.localMedia.size).toBe(0);
+  });
+
+  it('does not resurrect a media item after a local tombstone is created during hydration', async () => {
+    const remote = { ...media(), originalPath: 'users/max-owner/media/media-1/original', processedPath: 'users/max-owner/media/media-1/processed', remoteOnly: true };
+    state.objects.set(remote.originalPath!, new Blob(['raw'], { type: 'image/png' }));
+    state.objects.set(remote.processedPath!, new Blob(['processed'], { type: 'image/jpeg' }));
+    state.afterBlobRead = () => { state.deletedIds.add('media-1'); };
     await hydrateMediaBlob('max-owner', remote, max);
     expect(state.localMedia.size).toBe(0);
   });

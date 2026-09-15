@@ -1,8 +1,8 @@
-import { collection, doc, getDocs, runTransaction, setDoc, type Firestore } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getBlob } from 'firebase/storage';
+import { collection, deleteDoc, doc, getDocs, runTransaction, setDoc, type Firestore } from 'firebase/firestore';
+import { deleteObject, getStorage, ref, uploadBytes, getBlob } from 'firebase/storage';
 import { getSurfaceFirebase } from './firebase';
 import { dueSyncOperations, getSyncOperation, listNotes, listSyncOperations, putNote, queueMediaOperation, queuePinOperation, removePinOperation, retryPinOperation, type Note } from './db';
-import { listMedia, putMedia, type SurfaceMedia } from './media';
+import { isMediaDeleted, listMedia, putMedia, type SurfaceMedia } from './media';
 import type { SurfaceEntitlement } from './entitlement';
 
 let cachedDeviceId: string | null = null;
@@ -46,8 +46,12 @@ export async function queueMediaUpload(media: SurfaceMedia, entitlement: Surface
   await queueMediaOperation(uid, { id: `media:${media.id}`, kind: 'UPSERT_MEDIA', pinId: media.id, payload: media }, MAX_MEDIA_QUEUE);
 }
 
+export async function queueMediaDeletion(mediaId: string, uid: string): Promise<void> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(mediaId)) throw new Error('Unsupported media identifier.');
+  await queueMediaOperation(uid, { id: `media:${mediaId}`, kind: 'DELETE_MEDIA', pinId: mediaId, payload: { mediaId } }, MAX_MEDIA_QUEUE);
+}
+
 export function flushCloudSync(entitlement: SurfaceEntitlement, uid: string): Promise<string> {
-  if (!eligible(entitlement.tier)) return Promise.resolve('Local only - cloud sync not eligible');
   const active = flushes.get(uid);
   if (active) return active;
   const pending = flushCloudSyncNow(entitlement, uid).finally(() => { if (flushes.get(uid) === pending) flushes.delete(uid); });
@@ -62,13 +66,14 @@ async function flushCloudSyncNow(entitlement: SurfaceEntitlement, uid: string): 
   for (const operation of await dueSyncOperations(ownerUid)) {
     if (auth.currentUser?.uid !== ownerUid) return 'Sync paused after account change.';
     if (operation.kind === 'UPSERT_PIN' || operation.kind === 'DELETE_PIN') continue;
-    if ((operation.kind === 'UPSERT_MEDIA' || operation.kind === 'DELETE_MEDIA') && !maxOnly(entitlement.tier)) continue;
+    if ((operation.kind === 'UPSERT_NOTE' || operation.kind === 'DELETE_NOTE') && !eligible(entitlement.tier)) continue;
+    if (operation.kind === 'UPSERT_MEDIA' && !maxOnly(entitlement.tier)) continue;
     try {
       if (operation.kind === 'UPSERT_NOTE' || operation.kind === 'DELETE_NOTE') {
         await writeRecord(firestore, doc(firestore, 'users', ownerUid, 'notes', operation.pinId), operation.payload ?? {}, ownerUid);
       } else if (operation.kind === 'UPSERT_MEDIA' || operation.kind === 'DELETE_MEDIA') {
         if (operation.kind === 'DELETE_MEDIA') {
-          await setDoc(doc(firestore, 'users', ownerUid, 'media', operation.pinId), { uid: ownerUid, mediaId: operation.pinId, deletedAt: Date.now(), updatedByDeviceId: deviceId() }, { merge: true });
+          await deleteCloudMediaNow(ownerUid, operation.pinId, firestore);
         } else {
           const media = operation.payload as SurfaceMedia;
           await uploadMediaNow(media, ownerUid, firestore);
@@ -149,6 +154,26 @@ async function uploadMediaNow(media: SurfaceMedia, uid: string, firestore: Fires
   }, { merge: true });
 }
 
+async function deleteCloudMediaNow(uid: string, mediaId: string, firestore: Firestore): Promise<void> {
+  const { app, auth } = getSurfaceFirebase();
+  if (auth.currentUser?.uid !== uid) throw new Error('Account changed during media deletion.');
+  const storage = getStorage(app);
+  for (const variant of ['original', 'processed'] as const) {
+    try { await deleteObject(ref(storage, `users/${uid}/media/${mediaId}/${variant}`)); }
+    catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (code !== 'storage/object-not-found') throw error;
+    }
+    if (auth.currentUser?.uid !== uid) throw new Error('Account changed during media deletion.');
+  }
+  try { await deleteDoc(doc(firestore, 'users', uid, 'media', mediaId)); }
+  catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+    if (code !== 'not-found') throw error;
+  }
+  if (auth.currentUser?.uid !== uid) throw new Error('Account changed during media deletion.');
+}
+
 export async function hydrateMediaMetadata(entitlement: SurfaceEntitlement, uid: string): Promise<boolean> {
   if (!maxOnly(entitlement.tier)) return false;
   const { auth, firestore } = getSurfaceFirebase();
@@ -160,7 +185,7 @@ export async function hydrateMediaMetadata(entitlement: SurfaceEntitlement, uid:
   const remote: SurfaceMedia[] = [];
   for (const item of snapshot.docs) {
     const value = item.data();
-    if (value.uid !== uid || value.mediaId !== item.id || value.deletedAt || !/^[A-Za-z0-9_-]{1,128}$/.test(item.id)) continue;
+    if (value.uid !== uid || value.mediaId !== item.id || value.deletedAt || !/^[A-Za-z0-9_-]{1,128}$/.test(item.id) || await isMediaDeleted(uid, item.id)) continue;
     const originalPath = `users/${uid}/media/${item.id}/original`;
     const processedPath = `users/${uid}/media/${item.id}/processed`;
     if (value.originalPath !== originalPath || value.processedPath !== processedPath ||
@@ -198,13 +223,13 @@ export async function hydrateMediaMetadata(entitlement: SurfaceEntitlement, uid:
 export async function hydrateMediaBlob(uid: string, media: SurfaceMedia, entitlement: SurfaceEntitlement): Promise<SurfaceMedia> {
   if (!maxOnly(entitlement.tier) || !media.remoteOnly || !media.originalPath || !media.processedPath) return media;
   const { app, auth } = getSurfaceFirebase();
-  if (!uid || auth.currentUser?.uid !== uid || media.originalPath !== `users/${uid}/media/${media.id}/original` || media.processedPath !== `users/${uid}/media/${media.id}/processed`) return media;
+  if (!uid || auth.currentUser?.uid !== uid || await isMediaDeleted(uid, media.id) || media.originalPath !== `users/${uid}/media/${media.id}/original` || media.processedPath !== `users/${uid}/media/${media.id}/processed`) return media;
   const storage = getStorage(app);
   const [original, processed] = await Promise.all([
     getBlob(ref(storage, media.originalPath), MAX_MEDIA_OBJECT_BYTES),
     getBlob(ref(storage, media.processedPath), MAX_MEDIA_OBJECT_BYTES),
   ]);
-  if (auth.currentUser?.uid !== uid) return media;
+  if (auth.currentUser?.uid !== uid || await isMediaDeleted(uid, media.id)) return media;
   validateCloudMedia({ ...media, original, processed });
   const updated = { ...media, original, processed, remoteOnly: false };
   await putMedia(uid, updated);

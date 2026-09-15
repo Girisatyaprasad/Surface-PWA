@@ -15,7 +15,7 @@ let environment: RulesTestEnvironment;
 rulesTests('Max media Cloud Storage rules', () => {
   beforeAll(async () => {
     environment = await initializeTestEnvironment({
-      projectId: 'demo-surface-media',
+      projectId: 'adms-by-giri',
       firestore: { host: '127.0.0.1', port: 8080, rules: firestoreRules },
       storage: { host: '127.0.0.1', port: 9199, rules: storageRules },
     });
@@ -41,7 +41,10 @@ rulesTests('Max media Cloud Storage rules', () => {
         setDoc(doc(db, 'organizations/org-1/members/group-admin'), { uid: 'group-admin', organizationId: 'org-1', groupId: 'g1', status: 'active', surfaceRole: 'group_admin' }),
         setDoc(doc(db, 'organizations/org-1/members/org-admin'), { uid: 'org-admin', organizationId: 'org-1', groupId: null, status: 'active', surfaceRole: 'org_admin' }),
         setDoc(doc(db, 'organizations/org-1/members/partner-analyst'), { uid: 'partner-analyst', organizationId: 'org-1', groupId: null, status: 'active', surfaceRole: 'partner_analyst' }),
+        setDoc(doc(db, 'users/expired/media/expired-media'), { uid: 'expired', mediaId: 'expired-media' }),
       ]);
+      await context.storage(bucket).ref('users/expired/media/expired-media/original').put(image(), { contentType: 'image/jpeg' });
+      await context.storage(bucket).ref('users/expired/media/expired-media/processed').put(image(), { contentType: 'image/jpeg' });
     });
     await environment.authenticatedContext('max').storage(bucket).ref('users/max/media/m1/original')
       .put(image(), { contentType: 'image/jpeg' });
@@ -142,7 +145,17 @@ rulesTests('Max media Cloud Storage rules', () => {
   it('denies paths outside the Surface media namespace', async () => {
     await assertFails(put('max', 'users/max/private/photo.jpg', image()));
   });
-  it('does not allow client deletion of cloud objects without a deletion lifecycle', async () => {
-    await assertFails(object('max', 'users/max/media/m1/original').delete());
+  it('allows the owner to delete both variants, including after Max downgrade', async () => {
+    await assertSucceeds(object('max', 'users/max/media/m1/original').delete());
+    await assertSucceeds(object('max', 'users/max/media/m1/processed').delete());
+    await assertSucceeds(object('expired', 'users/expired/media/expired-media/original').delete());
+    await assertSucceeds(object('expired', 'users/expired/media/expired-media/processed').delete());
+  });
+  it('denies cross-UID, role, and unauthenticated cloud deletion', async () => {
+    await assertFails(object('free', 'users/max/media/m1/original').delete());
+    for (const uid of ['group-admin', 'org-admin', 'partner-analyst']) {
+      await assertFails(object(uid, 'users/max/media/m1/original').delete());
+    }
+    await assertFails(environment.unauthenticatedContext().storage(bucket).ref('users/max/media/m1/original').delete());
   });
 });
