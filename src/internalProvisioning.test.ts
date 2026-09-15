@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { changeInternalGroupPlan, checkInternalAdminAccess, createInternalOrganization, getInternalOrganizationStatus, InternalProvisioningError } from './internalProvisioning';
+import { changeInternalGroupPlan, checkInternalAdminAccess, createInternalOrganization, getInternalOrganizationStatus, provisionInternalPersonalPlan, InternalProvisioningError } from './internalProvisioning';
 
 const user = { getIdToken: vi.fn(async () => 'firebase-id-token') };
 const fetchMock = vi.fn();
@@ -39,5 +39,13 @@ describe('internal provisioning API client', () => {
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ code: 'INTERNAL_AUTHORITY_REQUIRED', error: 'private backend detail' }), { status: 403 }));
     await expect(checkInternalAdminAccess(user)).rejects.toMatchObject({ message: 'Access denied. This Surface account is not an internal admin.' });
+  });
+
+  it('provisions a personal plan through the internal endpoint without exposing credentials', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ tier: 'MAX', status: 'active', expiresAt: 123 }), { status: 200 }));
+    await expect(provisionInternalPersonalPlan(user, 'target-uid', 'MAX')).resolves.toMatchObject({ tier: 'MAX', status: 'active' });
+    expect(fetchMock.mock.calls[0][0]).toContain('/internal/users/target-uid/personal-plan');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ tier: 'MAX' });
   });
 });

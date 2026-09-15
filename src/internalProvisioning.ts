@@ -12,6 +12,8 @@ export type InternalOrganizationStatus = {
   groupPlanActive: boolean;
   initialAdminConfigured: boolean;
 };
+export type InternalPersonalPlanTier = 'FREE' | 'PRO' | 'MAX';
+export type InternalPersonalPlanStatus = { tier: InternalPersonalPlanTier; status: 'active' | 'UNPAID'; expiresAt: number | null };
 
 export type CreatedInternalOrganization = InternalOrganizationStatus;
 
@@ -39,10 +41,11 @@ async function internalRequest<T>(user: InternalProvisioningUser, path: string, 
     const messages: Record<string, string> = {
       AUTH_INVALID: 'Sign in again to continue.',
       INTERNAL_AUTHORITY_REQUIRED: 'Access denied. This Surface account is not an internal admin.',
-      SURFACE_ACCOUNT_NOT_FOUND: 'No existing Surface account was found for that email.',
+      SURFACE_ACCOUNT_NOT_FOUND: 'The Surface account was not found.',
       ORGANIZATION_NOT_FOUND: 'Organization was not found.',
       GROUP_PLAN_NOT_FOUND: 'Group Plan status was not found.',
       ORGANIZATION_REQUEST_INVALID: 'Check the organization details and try again.',
+      PERSONAL_PLAN_INVALID: 'Choose Free, Pro, or Max.',
     };
     throw new InternalProvisioningError(response.status, code, messages[code] ?? 'The provisioning request could not be completed.');
   }
@@ -73,4 +76,8 @@ export function changeInternalGroupPlan(user: InternalProvisioningUser, organiza
     'POST',
     body,
   );
+}
+
+export function provisionInternalPersonalPlan(user: InternalProvisioningUser, uid: string, tier: InternalPersonalPlanTier) {
+  return internalRequest<InternalPersonalPlanStatus>(user, `/internal/users/${encodeURIComponent(uid)}/personal-plan`, 'PATCH', { tier });
 }

@@ -5,8 +5,11 @@ import {
   checkInternalAdminAccess,
   createInternalOrganization,
   getInternalOrganizationStatus,
+  provisionInternalPersonalPlan,
   InternalProvisioningError,
   type InternalOrganizationStatus,
+  type InternalPersonalPlanStatus,
+  type InternalPersonalPlanTier,
 } from './internalProvisioning';
 
 type AccessState = 'checking' | 'allowed' | 'denied' | 'error';
@@ -21,6 +24,7 @@ export function InternalProvisioningScreen({ user, onBack }: { user: User; onBac
   const [adminLabel, setAdminLabel] = useState('Existing Surface account configured');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [personalPlan, setPersonalPlan] = useState<InternalPersonalPlanStatus | null>(null);
   const requestLock = useRef(false);
 
   useEffect(() => {
@@ -94,6 +98,14 @@ export function InternalProvisioningScreen({ user, onBack }: { user: User; onBac
     }
   };
 
+  const setPersonal = async (tier: InternalPersonalPlanTier) => {
+    if (requestLock.current) return;
+    requestLock.current = true; setBusy(true); setMessage('');
+    try { const next = await provisionInternalPersonalPlan(user, user.uid, tier); setPersonalPlan(next); setMessage(`Personal plan set to ${tier === 'FREE' ? 'Free' : tier === 'PRO' ? 'Pro' : 'Max'}.`); }
+    catch (error) { setMessage(errorMessage(error)); }
+    finally { requestLock.current = false; setBusy(false); }
+  };
+
   if (access === 'checking') return <section className="internal-screen"><p role="status">Verifying Surface internal access…</p></section>;
   if (access === 'denied') return <section className="internal-screen"><button type="button" className="internal-back" onClick={onBack}>Back to Surface</button><h1>Access denied</h1><p>This account is not authorized for Surface internal provisioning.</p></section>;
   if (access === 'error') return <section className="internal-screen"><button type="button" className="internal-back" onClick={onBack}>Back to Surface</button><h1>Access unavailable</h1><p>Surface could not verify internal access. Check your connection and try again.</p><button type="button" className="internal-button" onClick={() => { setAccess('checking'); void checkInternalAdminAccess(user).then((allowed) => setAccess(allowed ? 'allowed' : 'denied')).catch(() => setAccess('error')); }}>Retry</button></section>;
@@ -102,6 +114,12 @@ export function InternalProvisioningScreen({ user, onBack }: { user: User; onBac
     <header className="internal-heading"><button type="button" className="internal-back" onClick={onBack}>Back</button><h1>Surface Internal</h1></header>
     <p className="internal-status" role="status">Internal admin: <strong>Yes</strong></p>
     <p className="internal-test-note">Internal test provisioning only. No pricing or payment is involved.</p>
+    <section className="internal-personal-plan" aria-labelledby="internal-personal-plan-title">
+      <h2 id="internal-personal-plan-title">Personal plan</h2>
+      <p>Current: {personalPlan ? personalPlan.tier === 'FREE' ? 'Free' : personalPlan.tier === 'PRO' ? 'Pro' : 'Max' : 'Unknown'}</p>
+      <div className="internal-plan-actions">{(['FREE', 'PRO', 'MAX'] as const).map((tier) => <button key={tier} type="button" className="internal-button secondary" disabled={busy} onClick={() => void setPersonal(tier)}>{tier === 'FREE' ? 'Free' : tier === 'PRO' ? 'Pro' : 'Max'}</button>)}</div>
+      {personalPlan && <p className="internal-test-note">Status: {personalPlan.status === 'active' ? 'Active' : 'Free'}{personalPlan.expiresAt ? ` · Expires ${new Date(personalPlan.expiresAt).toLocaleDateString()}` : ''}</p>}
+    </section>
     <form className="internal-form" onSubmit={(event) => void create(event)}>
       <h2>Create organization</h2>
       <label>Organization name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} required /></label>
