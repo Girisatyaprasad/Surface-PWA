@@ -73,7 +73,7 @@ function App() {
       setPinsState([]); setNotesState([]); setMediaState([]);
       const cachedEntitlement = readLastKnownEntitlement(uid);
       setEntitlement(cachedEntitlement);
-      const refreshIssues: string[] = [];
+      let entitlementRefreshFailed = false;
       setAccountStateError('');
       const freeLocalMode: SurfaceEntitlement = { tier: 'FREE', proStatus: 'UNPAID', planId: null, expiresAt: null };
       let authoritativeEntitlement: SurfaceEntitlement | null = null;
@@ -84,7 +84,7 @@ function App() {
         setVerifiedEntitlementUid(uid);
         writeLastKnownEntitlement(uid, authoritativeEntitlement);
       } catch {
-        refreshIssues.push('Surface could not refresh account and plan status.');
+        entitlementRefreshFailed = true;
       }
       const localResults = await Promise.allSettled([listWorkspaceNotes(uid), listWorkspacePins(uid), listWorkspaceMedia(uid)]);
       if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
@@ -92,14 +92,12 @@ function App() {
       const localPins = localResults[1].status === 'fulfilled' ? localResults[1].value : [];
       const localMedia = localResults[2].status === 'fulfilled' ? localResults[2].value : [];
       setNotesState(localNotes); setPinsState(localPins); setMediaState(localMedia);
-      if (localResults.some((result) => result.status === 'rejected')) refreshIssues.push('Some local data could not be loaded. Other local Surface data remains available.');
 
       const dataEntitlement = authoritativeEntitlement ?? freeLocalMode;
       const cloudResults = await Promise.allSettled([hydrateWorkspaceNotes(dataEntitlement, uid), hydratePins(dataEntitlement, uid)]);
       if (activeUid.current !== uid || auth.currentUser?.uid !== uid) return;
       if (cloudResults[0].status === 'fulfilled') setNotesState(cloudResults[0].value);
       if (cloudResults[1].status === 'fulfilled') setPinsState(cloudResults[1].value);
-      if (cloudResults.some((result) => result.status === 'rejected')) refreshIssues.push('Cloud Notes or PINs could not refresh. Their local copies remain available.');
 
       try {
         const recovery = await getLegacyRecoveryStatus(uid);
@@ -113,7 +111,7 @@ function App() {
         try { await flushPinSyncForWorkspace(authoritativeEntitlement, uid); } catch { /* Cloud sync cannot block local use. */ }
         try { await flushWorkspaceCloudSync(authoritativeEntitlement, uid); } catch { /* Cloud sync cannot block local use. */ }
       }
-      if (activeUid.current === uid && auth.currentUser?.uid === uid) setAccountStateError(refreshIssues.join(' '));
+      if (activeUid.current === uid && auth.currentUser?.uid === uid) setAccountStateError(entitlementRefreshFailed ? 'Surface could not refresh account and plan status. Local features remain available.' : '');
     };
     loadWorkspaceRef.current = loadWorkspace;
     return onAuthStateChanged(auth, (nextUser) => {
